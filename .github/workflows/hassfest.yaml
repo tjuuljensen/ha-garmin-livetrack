@@ -1,7 +1,6 @@
 name: Hassfest
 on:
-  pull_request:
-  push:
+  workflow_dispatch:
 jobs:
   hassfest:
     runs-on: ubuntu-latest

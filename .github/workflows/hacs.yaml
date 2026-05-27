@@ -1,7 +1,6 @@
 name: HACS
 on:
-  pull_request:
-  push:
+  workflow_dispatch:
 jobs:
   hacs:
     runs-on: ubuntu-latest
