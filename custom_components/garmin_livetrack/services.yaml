@@ -1,0 +1,36 @@
+add_url:
+  name: Add URL
+  description: Add a Garmin LiveTrack URL manually.
+  fields:
+    url:
+      required: true
+      selector:
+        text:
+    source:
+      required: false
+      selector:
+        select:
+          options:
+            - service
+            - manual
+stop_session:
+  name: Stop Session
+  description: Stop one active LiveTrack session.
+  fields:
+    session_id:
+      required: false
+      selector:
+        text:
+    session_id_hash:
+      required: false
+      selector:
+        text:
+clear_ended:
+  name: Clear Ended
+  description: Clear ended sessions.
+reload_users:
+  name: Reload Users
+  description: Reload known users from storage.
+test_notification:
+  name: Test Notification
+  description: Send a test notification.
