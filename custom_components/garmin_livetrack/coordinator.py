@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Callable
 
 from homeassistant.core import Event, callback
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_ACCEPT_FIRST_SEEN_USERS,
@@ -27,7 +28,13 @@ from .const import (
     EVENT_SESSION_UPDATED,
     SERVICE_ADD_URL,
     SERVICE_CLEAR_ENDED,
+    SERVICE_CLEANUP_LEGACY_ENTITIES,
+    SERVICE_LIST_USERS,
+    SERVICE_REMOVE_USER,
     SERVICE_RELOAD_USERS,
+    SERVICE_REFRESH_ALL,
+    SERVICE_REFRESH_SESSION,
+    SERVICE_SET_USER_POLICY,
     SERVICE_STOP_SESSION,
     SERVICE_TEST_NOTIFICATION,
 )
@@ -38,6 +45,7 @@ from .models import (
     LiveTrackSource,
     LiveTrackStatus,
     extract_event_types,
+    normalize_activity,
     parse_garmin_datetime,
     stable_session_hash,
 )
@@ -66,6 +74,8 @@ class UserPolicy:
     enabled: bool = True
     first_seen: datetime | None = None
     last_seen: datetime | None = None
+    first_event_consumed: bool = False
+    mode: str = "normal"
 
 
 class LiveTrackSessionCoordinator:
@@ -75,6 +85,12 @@ class LiveTrackSessionCoordinator:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self.end_reason: str | None = None
+        self._no_progress_since: datetime | None = None
+        self._last_progress_count: int = 0
+        self._last_progress_point_ts: datetime | None = None
+        self.last_page_status: int | None = None
+        self.last_api_status: int | None = None
+        self.last_source_branch: str = "none"
 
     async def async_start(self) -> None:
         if self._task and not self._task.done():
@@ -97,7 +113,13 @@ class LiveTrackSessionCoordinator:
 
     async def _run_loop(self) -> None:
         while not self._stop.is_set():
-            await self._refresh_once()
+            try:
+                await self._refresh_once()
+            except Exception as err:  # noqa: BLE001
+                self.manager.last_error = f"poll_error:{type(err).__name__}"
+                self.session.status = LiveTrackStatus.GARMIN_ERROR
+                self.manager._notify_listeners()
+                break
             if self.session.status in {
                 LiveTrackStatus.ENDED,
                 LiveTrackStatus.EXPIRED,
@@ -107,8 +129,13 @@ class LiveTrackSessionCoordinator:
             }:
                 break
             interval = int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))
+            if self.session.status == LiveTrackStatus.WAITING_FOR_TRACKPOINT:
+                initial_wait_minutes = int(self.manager.options.get("initial_trackpoint_wait_minutes", 10))
+                within_initial = (datetime.now(UTC) - self.session.first_seen) < timedelta(minutes=initial_wait_minutes)
+                if within_initial:
+                    interval = min(interval, 10)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=max(15, interval))
+                await asyncio.wait_for(self._stop.wait(), timeout=max(30, interval))
             except asyncio.TimeoutError:
                 pass
 
@@ -116,14 +143,38 @@ class LiveTrackSessionCoordinator:
         self.session.status = LiveTrackStatus.FETCHING
         fetch = await self.manager.client.fetch(self.session.identity)
         self.session.last_fetch = fetch.fetched_at
+        self.last_page_status = fetch.page_status
+        self.last_api_status = fetch.api_status
+        self.last_source_branch = str(fetch.source.get("trackpoints_source", "none")) if isinstance(fetch.source, dict) else "none"
         self.session.errors.extend(fetch.errors[-3:])
         if fetch.errors:
             self.manager.last_error = fetch.errors[-1].code
+            codes = {e.code for e in fetch.errors}
+            if "missing_session" in codes or "missing_trackpoints" in codes:
+                self.manager.shape_change_count += 1
+                if self.manager.shape_change_count >= 3:
+                    self.manager.shape_change_suspected = True
+            else:
+                self.manager.shape_change_count = 0
+        elif self.manager.shape_change_count:
+            self.manager.shape_change_count = max(0, self.manager.shape_change_count - 1)
 
         if fetch.ok:
             self.session.last_success = fetch.fetched_at
             self.session.garmin_user = (fetch.session.get("userDisplayName") or "").strip() or self.session.garmin_user
-            self.session.activity_type = fetch.session.get("activityType") or fetch.session.get("activity") or self.session.activity_type
+            activity_raw = (
+                fetch.session.get("activityType")
+                or fetch.session.get("activity")
+                or fetch.session.get("sportType")
+                or fetch.session.get("activityName")
+                or fetch.last_trackpoint.get("activityType")
+                or fetch.last_trackpoint.get("activity")
+                or (fetch.last_trackpoint.get("fitnessPointData") or {}).get("activityType")
+                or (fetch.last_trackpoint.get("fitnessPointData") or {}).get("activity")
+                or self.session.activity_type
+            )
+            if activity_raw:
+                self.session.activity_type = normalize_activity(activity_raw)
             self.session.start = parse_garmin_datetime(fetch.session.get("start")) or self.session.start
             self.session.expected_end = parse_garmin_datetime(fetch.session.get("end")) or self.session.expected_end
             self.session.trackpoint_count = fetch.trackpoint_count
@@ -134,11 +185,16 @@ class LiveTrackSessionCoordinator:
             else:
                 self.session.status = LiveTrackStatus.WAITING_FOR_TRACKPOINT
 
+            if await self._handle_no_progress(now=fetch.fetched_at):
+                return
             await self._handle_end_state()
         else:
             stale_cutoff = timedelta(minutes=int(self.manager.options.get(CONF_STALE_MINUTES, 15)))
             if self.session.last_success and (datetime.now(UTC) - self.session.last_success) > stale_cutoff:
                 self.session.status = LiveTrackStatus.STALE
+                self.end_reason = "fetch_stale"
+                await self.manager.async_finalize_session(self, self.end_reason)
+                return
             else:
                 self.session.status = LiveTrackStatus.WAITING_FOR_TRACKPOINT
 
@@ -154,7 +210,7 @@ class LiveTrackSessionCoordinator:
     async def _handle_end_state(self) -> None:
         now = datetime.now(UTC)
         max_runtime_hours = int(self.manager.options.get(CONF_MAX_RUNTIME_HOURS, 23))
-        if self.session.start and now - self.session.start > timedelta(hours=max_runtime_hours):
+        if self.session.start and self._safe_elapsed(now, self.session.start) > timedelta(hours=max_runtime_hours):
             self.session.status = LiveTrackStatus.EXPIRED
             self.end_reason = "max_runtime"
             await self.manager.async_finalize_session(self, self.end_reason)
@@ -162,7 +218,16 @@ class LiveTrackSessionCoordinator:
 
         event_types = set(self.session.last_point.event_types if self.session.last_point else [])
         ended_by_event = "END" in event_types
-        ended_by_time = bool(self.session.expected_end and self.session.expected_end < now)
+        ended_by_time = self._safe_is_past(self.session.expected_end, now)
+        # If Garmin explicitly emits END, finalize quickly instead of holding
+        # full finalization window meant for inferred endings.
+        if ended_by_event:
+            self.session.status = LiveTrackStatus.ENDED
+            self.session.actual_end = now
+            self.end_reason = "end_event"
+            await self.manager.async_finalize_session(self, self.end_reason)
+            return
+
         if ended_by_event or ended_by_time:
             if self.session.status != LiveTrackStatus.ENDING:
                 self.session.status = LiveTrackStatus.ENDING
@@ -174,6 +239,63 @@ class LiveTrackSessionCoordinator:
                 self.session.status = LiveTrackStatus.ENDED
                 self.session.actual_end = now
                 await self.manager.async_finalize_session(self, self.end_reason or "ended")
+
+    async def _handle_no_progress(self, now: datetime) -> bool:
+        stale_cutoff = timedelta(minutes=int(self.manager.options.get(CONF_STALE_MINUTES, 15)))
+        initial_wait = timedelta(minutes=int(self.manager.options.get("initial_trackpoint_wait_minutes", 10)))
+        current_count = self.session.trackpoint_count
+        current_ts = self.session.last_point.timestamp if self.session.last_point else None
+
+        progressed = False
+        if current_count > self._last_progress_count:
+            progressed = True
+        elif current_ts and self._last_progress_point_ts and current_ts > self._last_progress_point_ts:
+            progressed = True
+        elif current_ts and self._last_progress_point_ts is None:
+            progressed = True
+
+        if progressed:
+            self._last_progress_count = current_count
+            self._last_progress_point_ts = current_ts
+            self._no_progress_since = None
+            return False
+
+        # No points at all after initial wait + stale window => stale/finalize.
+        if current_count == 0:
+            age = now - self.session.first_seen
+            if age > (initial_wait + stale_cutoff):
+                self.session.status = LiveTrackStatus.STALE
+                self.end_reason = "no_trackpoints"
+                await self.manager.async_finalize_session(self, self.end_reason)
+                return True
+            return False
+
+        if self._no_progress_since is None:
+            self._no_progress_since = now
+            return False
+
+        if now - self._no_progress_since > stale_cutoff:
+            self.session.status = LiveTrackStatus.STALE
+            self.end_reason = "no_progress"
+            await self.manager.async_finalize_session(self, self.end_reason)
+            return True
+        return False
+
+    def _safe_is_past(self, value: datetime | None, now: datetime) -> bool:
+        if value is None:
+            return False
+        try:
+            return value < now
+        except TypeError:
+            fixed = value.replace(tzinfo=UTC) if value.tzinfo is None else value
+            return fixed < now
+
+    def _safe_elapsed(self, now: datetime, start: datetime) -> timedelta:
+        try:
+            return now - start
+        except TypeError:
+            fixed = start.replace(tzinfo=UTC) if start.tzinfo is None else start
+            return now - fixed
 
     def _to_point(self, raw: dict) -> LiveTrackPoint | None:
         if not raw:
@@ -214,7 +336,10 @@ class GarminLiveTrackManager:
         self.unsub_imap_listener = None
         self.lock = asyncio.Lock()
         self.last_error = None
+        self.shape_change_suspected = False
+        self.shape_change_count = 0
         self._listeners: list[Callable[[], None]] = []
+        self.startup_debug: dict[str, str | int | bool] = {}
 
     @staticmethod
     def _session_key(session_id: str) -> str:
@@ -227,6 +352,24 @@ class GarminLiveTrackManager:
     def _notify_listeners(self) -> None:
         for listener in list(self._listeners):
             listener()
+
+    @staticmethod
+    def _storage_payload(value: dict | None) -> dict:
+        if not isinstance(value, dict):
+            return {}
+        # Be resilient to wrapped storage shapes seen across environments.
+        if "active_sessions" in value or "known_users" in value:
+            return value
+        data = value.get("data")
+        if isinstance(data, dict):
+            return data
+        return {}
+
+    @staticmethod
+    def _persistable_status(status: LiveTrackStatus) -> LiveTrackStatus:
+        if status == LiveTrackStatus.FETCHING:
+            return LiveTrackStatus.WAITING_FOR_TRACKPOINT
+        return status
 
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(listener)
@@ -310,7 +453,8 @@ class GarminLiveTrackManager:
         return count
 
     async def async_recover_sessions(self):
-        data = await self.store.async_load() or {}
+        raw = await self.store.async_load() or {}
+        data = self._storage_payload(raw)
         async with self.lock:
             seen: set[str] = set()
             for row in data.get("active_sessions", []):
@@ -327,13 +471,78 @@ class GarminLiveTrackManager:
                     source=LiveTrackSource(row.get("source", LiveTrackSource.RECOVERY.value)),
                 )
                 session = LiveTrackSession(identity, row.get("garmin_user"), row.get("activity_type"), parse_garmin_datetime(row.get("start")), parse_garmin_datetime(row.get("expected_end")), None, first_seen, None, None, None, 0, LiveTrackStatus(row.get("status", LiveTrackStatus.DISCOVERED.value)))
+                session.status = self._persistable_status(session.status)
                 coord = LiveTrackSessionCoordinator(self, session)
-                await coord.async_first_fetch()
-                if session.status in ACTIVE_STATES:
-                    self._prune_duplicate_waiting_sessions_for_user(session)
-                    self.sessions[identity.session_id] = coord
-                    await coord.async_start()
+                self._prune_duplicate_waiting_sessions_for_user(session)
+                self.sessions[identity.session_id] = coord
+                await coord.async_start()
         self._notify_listeners()
+
+    async def async_restore_sessions_from_storage(self) -> int:
+        """Restore recoverable sessions without network fetch, then let pollers run."""
+        raw = await self.store.async_load() or {}
+        data = self._storage_payload(raw)
+        restored = 0
+        async with self.lock:
+            seen: set[str] = set()
+            for row in data.get("active_sessions", []):
+                sid = self._session_key(row.get("session_id", ""))
+                if not sid or sid in self.sessions or sid in seen:
+                    continue
+                seen.add(sid)
+                source_value = row.get("source", LiveTrackSource.RECOVERY.value)
+                try:
+                    source = LiveTrackSource(source_value)
+                except ValueError:
+                    source = LiveTrackSource.RECOVERY
+                identity = LiveTrackIdentity(
+                    session_id=sid,
+                    token=row.get("token", ""),
+                    canonical_url=f"https://livetrack.garmin.com/session/{sid}/token/{row.get('token','')}",
+                    redacted_url=row.get("redacted_url", ""),
+                    source=source,
+                )
+                status_value = row.get("status", LiveTrackStatus.DISCOVERED.value)
+                try:
+                    status = LiveTrackStatus(status_value)
+                except ValueError:
+                    status = LiveTrackStatus.DISCOVERED
+                status = self._persistable_status(status)
+                session = LiveTrackSession(
+                    identity=identity,
+                    garmin_user=row.get("garmin_user"),
+                    activity_type=row.get("activity_type"),
+                    start=parse_garmin_datetime(row.get("start")),
+                    expected_end=parse_garmin_datetime(row.get("expected_end")),
+                    actual_end=None,
+                    first_seen=parse_garmin_datetime(row.get("first_seen")) or datetime.now(UTC),
+                    last_fetch=None,
+                    last_success=None,
+                    last_point=None,
+                    trackpoint_count=0,
+                    status=status,
+                    notification_started_sent=row.get("notification_started_sent", False),
+                    notification_ended_sent=row.get("notification_ended_sent", False),
+                )
+                self._prune_duplicate_waiting_sessions_for_user(session)
+                coord = LiveTrackSessionCoordinator(self, session)
+                self.sessions[sid] = coord
+                # Start poll loop immediately so restored sessions do not remain
+                # in passive "restored-only" state after restart.
+                await coord.async_start()
+                restored += 1
+        if restored:
+            self._notify_listeners()
+        return restored
+
+    async def async_start_restored_pollers(self) -> int:
+        started = 0
+        for coord in list(self.sessions.values()):
+            if coord._task and not coord._task.done():
+                continue
+            await coord.async_start()
+            started += 1
+        return started
 
     async def async_save_storage(self):
         active_sessions = []
@@ -354,7 +563,7 @@ class GarminLiveTrackManager:
                     "activity_type": c.session.activity_type,
                     "start": c.session.start.isoformat() if c.session.start else None,
                     "expected_end": c.session.expected_end.isoformat() if c.session.expected_end else None,
-                    "status": c.session.status.value,
+                    "status": self._persistable_status(c.session.status).value,
                     "notification_started_sent": c.session.notification_started_sent,
                     "notification_ended_sent": c.session.notification_ended_sent,
                 }
@@ -363,13 +572,34 @@ class GarminLiveTrackManager:
         await self.store.async_save(
             {
                 "active_sessions": active_sessions,
-                "known_users": {name: {"name": p.name, "enabled": p.enabled} for name, p in self.known_users.items()},
+                "known_users": {
+                    name: {
+                        "name": p.name,
+                        "enabled": p.enabled,
+                        "first_seen": p.first_seen.isoformat() if p.first_seen else None,
+                        "last_seen": p.last_seen.isoformat() if p.last_seen else None,
+                        "first_event_consumed": p.first_event_consumed,
+                        "mode": p.mode,
+                    }
+                    for name, p in self.known_users.items()
+                },
             }
         )
 
     async def async_load_storage(self):
-        data = await self.store.async_load() or {}
-        self.known_users = {n: UserPolicy(name=v.get("name", n), enabled=v.get("enabled", True)) for n, v in data.get("known_users", {}).items()}
+        raw = await self.store.async_load() or {}
+        data = self._storage_payload(raw)
+        self.known_users = {
+            n: UserPolicy(
+                name=v.get("name", n),
+                enabled=v.get("enabled", True),
+                first_seen=parse_garmin_datetime(v.get("first_seen")),
+                last_seen=parse_garmin_datetime(v.get("last_seen")),
+                first_event_consumed=v.get("first_event_consumed", False),
+                mode=v.get("mode", "normal"),
+            )
+            for n, v in data.get("known_users", {}).items()
+        }
 
     async def async_reload_users(self):
         await self.async_load_storage()
@@ -383,6 +613,123 @@ class GarminLiveTrackManager:
         domain, service = target.split(".", 1)
         await self.hass.services.async_call(domain, service, {"message": "Garmin LiveTrack test notification"}, blocking=False)
 
+    async def async_refresh_session(self, session_id: str | None = None, session_id_hash: str | None = None) -> bool:
+        target_sid = None
+        if session_id:
+            sid = self._session_key(session_id)
+            if sid in self.sessions:
+                target_sid = sid
+        elif session_id_hash:
+            for candidate in self.sessions:
+                if stable_session_hash(candidate) == session_id_hash:
+                    target_sid = candidate
+                    break
+        if not target_sid:
+            return False
+        await self.sessions[target_sid]._refresh_once()
+        return True
+
+    async def async_refresh_all(self) -> int:
+        count = 0
+        for coord in list(self.sessions.values()):
+            await coord._refresh_once()
+            count += 1
+        return count
+
+    async def async_cleanup_legacy_entities(self) -> int:
+        registry = er.async_get(self.hass)
+        to_remove: list[str] = []
+        expected_user_keys: set[str] = set()
+        for name in self.known_users:
+            key = self._user_key(name)
+            if key:
+                expected_user_keys.add(key)
+        for coord in self.sessions.values():
+            key = self._user_key(coord.session.garmin_user)
+            if key:
+                expected_user_keys.add(key)
+
+        expected_user_uids: set[str] = set()
+        for key in expected_user_keys:
+            h = stable_session_hash(key)
+            expected_user_uids.add(f"garmin_livetrack_user_status_{h}")
+            expected_user_uids.add(f"garmin_livetrack_user_active_{h}")
+            expected_user_uids.add(f"garmin_livetrack_user_tracker_{h}")
+
+        for entry in list(registry.entities.values()):
+            if entry.platform != "garmin_livetrack":
+                continue
+            if entry.disabled_by is not None:
+                continue
+            uid = entry.unique_id or ""
+            # Keep current per-user and aggregate entity families.
+            if uid.startswith("garmin_livetrack_user_"):
+                if uid in expected_user_uids:
+                    continue
+                to_remove.append(entry.entity_id)
+                continue
+            if uid in {
+                "garmin_livetrack_active_count",
+                "garmin_livetrack_last_error",
+                "garmin_livetrack_session_count",
+                "garmin_livetrack_any_active",
+            }:
+                continue
+            # Remove only unavailable/orphan candidates.
+            if entry.entity_id in self.hass.states.async_entity_ids():
+                continue
+            to_remove.append(entry.entity_id)
+
+        for entity_id in to_remove:
+            registry.async_remove(entity_id)
+        return len(to_remove)
+
+    async def async_set_user_policy(self, user: str, enabled: bool | None = None, mode: str | None = None) -> bool:
+        name = (user or "").strip()
+        if not name:
+            return False
+        policy = self.known_users.get(name)
+        now = datetime.now(UTC)
+        if policy is None:
+            policy = UserPolicy(name=name, enabled=True, first_seen=now, last_seen=now, first_event_consumed=False, mode="normal")
+            self.known_users[name] = policy
+
+        if enabled is not None:
+            policy.enabled = bool(enabled)
+        if mode in {"normal", "register_only", "one_event_only"}:
+            policy.mode = mode
+        policy.last_seen = now
+        self._sync_allowed_user(name)
+        await self.async_save_storage()
+        self._notify_listeners()
+        return True
+
+    async def async_remove_user(self, user: str) -> bool:
+        name = (user or "").strip()
+        if not name:
+            return False
+        removed = self.known_users.pop(name, None)
+        current = [u for u in self.options.get(CONF_ALLOWED_USERS, []) if isinstance(u, str)]
+        self.options[CONF_ALLOWED_USERS] = [u for u in current if u != name]
+        await self.async_save_storage()
+        self._notify_listeners()
+        return removed is not None
+
+    async def async_list_users(self) -> list[dict]:
+        rows: list[dict] = []
+        for name, policy in sorted(self.known_users.items(), key=lambda item: item[0].lower()):
+            rows.append(
+                {
+                    "name": name,
+                    "enabled": policy.enabled,
+                    "mode": policy.mode,
+                    "first_event_consumed": policy.first_event_consumed,
+                    "first_seen": policy.first_seen.isoformat() if policy.first_seen else None,
+                    "last_seen": policy.last_seen.isoformat() if policy.last_seen else None,
+                }
+            )
+        return rows
+
     async def async_handle_imap_event(self, event: Event):
         text = " ".join(str(event.data.get(k, "")) for k in ("custom", "text", "body", "subject"))
         text = text.replace("=\r\n", "").replace("=\n", "")
@@ -393,18 +740,59 @@ class GarminLiveTrackManager:
     async def async_validate_session_policy(self, session: LiveTrackSession):
         strict = self.options.get(CONF_STRICT_USERS, False)
         user = (session.garmin_user or "").strip()
-        if strict:
-            allowed = {u.strip() for u in self.options.get(CONF_ALLOWED_USERS, []) if u.strip()}
-            if user not in allowed:
-                if self.options.get(CONF_ACCEPT_FIRST_SEEN_USERS, False) and user:
-                    self.known_users[user] = UserPolicy(name=user, enabled=True, first_seen=datetime.now(UTC), last_seen=datetime.now(UTC))
-                    current = self.options.get(CONF_ALLOWED_USERS, [])
-                    if user not in current:
-                        self.options[CONF_ALLOWED_USERS] = [*current, user]
-                else:
+        accept_first = self.options.get(CONF_ACCEPT_FIRST_SEEN_USERS, False)
+        now = datetime.now(UTC)
+
+        if user:
+            policy = self.known_users.get(user)
+            if policy is None:
+                if strict and not accept_first:
+                    # Register-only mode: user must be explicitly enabled later.
+                    self.known_users[user] = UserPolicy(
+                        name=user,
+                        enabled=False,
+                        first_seen=now,
+                        last_seen=now,
+                        first_event_consumed=False,
+                        mode="register_only",
+                    )
+                    self._sync_allowed_user(user)
                     session.status = LiveTrackStatus.REJECTED_USER
                     session.rejected_reason = "rejected_user"
                     return False
+                if strict and accept_first:
+                    # One event only: first unknown event is accepted, then disabled.
+                    self.known_users[user] = UserPolicy(
+                        name=user,
+                        enabled=False,
+                        first_seen=now,
+                        last_seen=now,
+                        first_event_consumed=True,
+                        mode="one_event_only",
+                    )
+                    self._sync_allowed_user(user)
+                else:
+                    # strict=false: register and track immediately.
+                    self.known_users[user] = UserPolicy(
+                        name=user,
+                        enabled=True,
+                        first_seen=now,
+                        last_seen=now,
+                        first_event_consumed=False,
+                        mode="normal",
+                    )
+                    self._sync_allowed_user(user)
+            else:
+                policy.last_seen = now
+                if strict and not policy.enabled:
+                    session.status = LiveTrackStatus.REJECTED_USER
+                    session.rejected_reason = "rejected_user"
+                    return False
+        elif strict:
+            session.status = LiveTrackStatus.REJECTED_USER
+            session.rejected_reason = "rejected_user"
+            return False
+
         filt = self.options.get(CONF_ACTIVITY_FILTER, "all")
         activity = str(session.activity_type or "other").strip().lower()
         if filt != "all" and activity != filt:
@@ -412,6 +800,12 @@ class GarminLiveTrackManager:
             session.rejected_reason = "rejected_activity"
             return False
         return True
+
+    def _sync_allowed_user(self, user: str) -> None:
+        current = [u for u in self.options.get(CONF_ALLOWED_USERS, []) if isinstance(u, str)]
+        if user in current:
+            return
+        self.options[CONF_ALLOWED_USERS] = [*current, user]
 
     async def async_notify_start(self, session: LiveTrackSession):
         if not self.options.get(CONF_ENABLE_NOTIFICATIONS, True) or session.notification_started_sent:
@@ -487,6 +881,35 @@ class GarminLiveTrackManager:
         async def _test(call):
             await self.async_send_test_notification()
 
+        async def _refresh_session(call):
+            await self.async_refresh_session(
+                call.data.get("session_id"),
+                call.data.get("session_id_hash"),
+            )
+
+        async def _refresh_all(call):
+            await self.async_refresh_all()
+
+        async def _cleanup_legacy(call):
+            await self.async_cleanup_legacy_entities()
+
+        async def _set_user_policy(call):
+            await self.async_set_user_policy(
+                call.data.get("user", ""),
+                call.data.get("enabled"),
+                call.data.get("mode"),
+            )
+
+        async def _remove_user(call):
+            await self.async_remove_user(call.data.get("user", ""))
+
+        async def _list_users(call):
+            users = await self.async_list_users()
+            self.hass.bus.async_fire(
+                "garmin_livetrack_users_listed",
+                {"count": len(users), "users": users},
+            )
+
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_ADD_URL):
             self.hass.services.async_register("garmin_livetrack", SERVICE_ADD_URL, _add)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_STOP_SESSION):
@@ -497,6 +920,18 @@ class GarminLiveTrackManager:
             self.hass.services.async_register("garmin_livetrack", SERVICE_RELOAD_USERS, _reload)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_TEST_NOTIFICATION):
             self.hass.services.async_register("garmin_livetrack", SERVICE_TEST_NOTIFICATION, _test)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_REFRESH_SESSION):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_REFRESH_SESSION, _refresh_session)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_REFRESH_ALL):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_REFRESH_ALL, _refresh_all)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_CLEANUP_LEGACY_ENTITIES):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_CLEANUP_LEGACY_ENTITIES, _cleanup_legacy)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_SET_USER_POLICY):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_SET_USER_POLICY, _set_user_policy)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_REMOVE_USER):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_REMOVE_USER, _remove_user)
+        if not self.hass.services.has_service("garmin_livetrack", SERVICE_LIST_USERS):
+            self.hass.services.async_register("garmin_livetrack", SERVICE_LIST_USERS, _list_users)
 
     async def _update_imap_listener(self):
         enabled = self.options.get(CONF_LISTEN_TO_IMAP_EVENTS, True)

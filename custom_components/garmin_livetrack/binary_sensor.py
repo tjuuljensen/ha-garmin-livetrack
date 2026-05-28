@@ -3,21 +3,23 @@ from __future__ import annotations
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .coordinator import ACTIVE_STATES
+from .icons import activity_icon
 from .models import stable_session_hash
+from .sensor import _discover_entity_keys, _select_session_for_user
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     manager = entry.runtime_data.manager
-    known: dict[str, GarminSessionActiveBinarySensor] = {}
+    known: dict[str, GarminUserActiveBinarySensor] = {}
     async_add_entities([GarminAnyActiveBinarySensor(manager)])
 
     def _sync() -> None:
         new_entities = []
-        for sid in manager.sessions:
-            if sid in known:
+        for key in _discover_entity_keys(manager):
+            if key in known:
                 continue
-            entity = GarminSessionActiveBinarySensor(manager, sid)
-            known[sid] = entity
+            entity = GarminUserActiveBinarySensor(manager, key)
+            known[key] = entity
             new_entities.append(entity)
         if new_entities:
             async_add_entities(new_entities)
@@ -48,15 +50,27 @@ class GarminAnyActiveBinarySensor(_BaseBinary):
         return any(c.session.status in ACTIVE_STATES for c in self.manager.sessions.values())
 
 
-class GarminSessionActiveBinarySensor(_BaseBinary):
-    def __init__(self, manager, session_id: str):
+class GarminUserActiveBinarySensor(_BaseBinary):
+    def __init__(self, manager, entity_key: str):
         super().__init__(manager)
-        self.session_id = session_id
-        sid_hash = stable_session_hash(session_id)
-        self._attr_name = f"Garmin LiveTrack {sid_hash} Active"
-        self._attr_unique_id = f"garmin_livetrack_active_{sid_hash}"
+        self.entity_key = entity_key
+        self._attr_unique_id = f"garmin_livetrack_user_active_{stable_session_hash(entity_key)}"
+
+    @property
+    def name(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        user = (coord.session.garmin_user if coord else "") or ""
+        user = user.strip()
+        return f"Garmin LiveTrack {(user or self.entity_key)} Active"
 
     @property
     def is_on(self):
-        coord = self.manager.sessions.get(self.session_id)
+        coord = _select_session_for_user(self.manager, self.entity_key)
         return bool(coord and coord.session.status in ACTIVE_STATES)
+
+    @property
+    def icon(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        if not coord:
+            return "mdi:map-marker-path"
+        return activity_icon(coord.session.activity_type, self.is_on)

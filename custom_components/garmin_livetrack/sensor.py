@@ -5,9 +5,49 @@ from homeassistant.components.sensor import SensorEntity
 from .models import stable_session_hash
 
 
+def _user_key(name: str | None) -> str:
+    value = (name or "").strip().lower()
+    return value
+
+
+def _select_session_for_user(manager, key: str):
+    candidates = []
+    for sid, coord in manager.sessions.items():
+        session = coord.session
+        if key.startswith("session:"):
+            if sid == key.split(":", 1)[1]:
+                candidates.append(coord)
+            continue
+        if _user_key(session.garmin_user) == key:
+            candidates.append(coord)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda c: (
+            c.session.last_success is not None,
+            c.session.last_success or c.session.first_seen,
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
+def _discover_entity_keys(manager) -> set[str]:
+    keys: set[str] = set()
+    for name in manager.known_users:
+        key = _user_key(name)
+        if key:
+            keys.add(key)
+    for sid, coord in manager.sessions.items():
+        user = (coord.session.garmin_user or "").strip()
+        if user:
+            keys.add(_user_key(user))
+    return keys
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     manager = entry.runtime_data.manager
-    known: dict[str, GarminSessionStatusSensor] = {}
+    known: dict[str, GarminUserStatusSensor] = {}
     async_add_entities(
         [
             GarminActiveCountSensor(manager),
@@ -18,11 +58,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     def _sync() -> None:
         new_entities = []
-        for sid, coord in manager.sessions.items():
-            if sid in known:
+        for key in _discover_entity_keys(manager):
+            if key in known:
                 continue
-            entity = GarminSessionStatusSensor(manager, sid)
-            known[sid] = entity
+            entity = GarminUserStatusSensor(manager, key)
+            known[key] = entity
             new_entities.append(entity)
         if new_entities:
             async_add_entities(new_entities)
@@ -71,36 +111,70 @@ class GarminLastErrorSensor(_BaseManagerSensor):
         return self.manager.last_error or "none"
 
 
-class GarminSessionStatusSensor(_BaseManagerSensor):
-    def __init__(self, manager, session_id: str):
+class GarminUserStatusSensor(_BaseManagerSensor):
+    def __init__(self, manager, entity_key: str):
         super().__init__(manager)
-        self.session_id = session_id
-        sid_hash = stable_session_hash(session_id)
-        self._attr_name = f"Garmin LiveTrack {sid_hash} Status"
-        self._attr_unique_id = f"garmin_livetrack_status_{sid_hash}"
+        self.entity_key = entity_key
+        hash_part = stable_session_hash(entity_key)
+        self._attr_unique_id = f"garmin_livetrack_user_status_{hash_part}"
+
+    @property
+    def name(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        user = (coord.session.garmin_user if coord else "") or ""
+        user = user.strip()
+        return f"Garmin LiveTrack {(user or self.entity_key)} Status"
 
     @property
     def available(self):
-        return self.session_id in self.manager.sessions
+        return _select_session_for_user(self.manager, self.entity_key) is not None
 
     @property
     def native_value(self):
-        coord = self.manager.sessions.get(self.session_id)
+        coord = _select_session_for_user(self.manager, self.entity_key)
         if not coord:
             return "ended"
         return coord.session.status.value
 
     @property
     def extra_state_attributes(self):
-        coord = self.manager.sessions.get(self.session_id)
+        coord = _select_session_for_user(self.manager, self.entity_key)
         if not coord:
-            return {"session_id_hash": stable_session_hash(self.session_id)}
+            return {"entity_key": self.entity_key}
         s = coord.session
         return {
-            "session_id_hash": stable_session_hash(self.session_id),
-            "redacted_url": s.identity.redacted_url,
+            "entity_key": self.entity_key,
+            "session_id_hash": stable_session_hash(s.identity.session_id),
+            "url": s.identity.canonical_url,
             "garmin_user": s.garmin_user,
             "activity": s.activity_type,
             "trackpoint_count": s.trackpoint_count,
+            "last_fetch": s.last_fetch.isoformat() if s.last_fetch else None,
             "last_success": s.last_success.isoformat() if s.last_success else None,
+            "page_status": coord.last_page_status,
+            "api_status": coord.last_api_status,
+            "trackpoints_source": coord.last_source_branch,
+            "poll_task_alive": bool(coord._task and not coord._task.done()),
         }
+
+    @property
+    def icon(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        if not coord:
+            return "mdi:progress-question"
+        status = coord.session.status
+        if status.value == "fetching":
+            return "mdi:cloud-sync-outline"
+        if status.value == "waiting_for_trackpoint":
+            return "mdi:timer-sand"
+        if status.value == "active":
+            return "mdi:signal"
+        if status.value == "ending":
+            return "mdi:flag-checkered"
+        if status.value == "ended":
+            return "mdi:check-circle-outline"
+        if status.value in {"stale", "garmin_error"}:
+            return "mdi:alert-circle-outline"
+        if status.value in {"expired", "stopped"}:
+            return "mdi:stop-circle-outline"
+        return "mdi:progress-question"

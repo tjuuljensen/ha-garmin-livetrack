@@ -15,12 +15,13 @@ def _schema(defaults: dict, *, include_users: bool = True) -> vol.Schema:
         vol.Required(CONF_STRICT_USERS, default=defaults.get(CONF_STRICT_USERS, DEFAULT_STRICT_USERS)): bool,
         vol.Required(CONF_ACCEPT_FIRST_SEEN_USERS, default=defaults.get(CONF_ACCEPT_FIRST_SEEN_USERS, DEFAULT_ACCEPT_FIRST_SEEN_USERS)): bool,
         vol.Required(CONF_ACTIVITY_FILTER, default=defaults.get(CONF_ACTIVITY_FILTER, DEFAULT_ACTIVITY_FILTER)): vol.In(ACTIVITY_VALUES),
-        vol.Required(CONF_UPDATE_INTERVAL, default=defaults.get(CONF_UPDATE_INTERVAL, int(DEFAULT_UPDATE_INTERVAL.total_seconds()))): vol.All(int, vol.Range(min=15)),
+        vol.Required(CONF_UPDATE_INTERVAL, default=defaults.get(CONF_UPDATE_INTERVAL, int(DEFAULT_UPDATE_INTERVAL.total_seconds()))): vol.All(int, vol.Range(min=30)),
         vol.Required(CONF_INITIAL_TRACKPOINT_WAIT, default=defaults.get(CONF_INITIAL_TRACKPOINT_WAIT, int(DEFAULT_INITIAL_TRACKPOINT_WAIT.total_seconds() / 60))): vol.All(int, vol.Range(min=1)),
         vol.Required(CONF_MAX_RUNTIME_HOURS, default=defaults.get(CONF_MAX_RUNTIME_HOURS, DEFAULT_MAX_RUNTIME_HOURS)): vol.All(int, vol.Range(min=1, max=48)),
         vol.Required(CONF_STALE_MINUTES, default=defaults.get(CONF_STALE_MINUTES, DEFAULT_STALE_MINUTES)): vol.All(int, vol.Range(min=2)),
         vol.Required(CONF_FINALIZATION_MINUTES, default=defaults.get(CONF_FINALIZATION_MINUTES, DEFAULT_FINALIZATION_MINUTES)): vol.All(int, vol.Range(min=0)),
         vol.Required(CONF_RETAIN_ENDED_HOURS, default=defaults.get(CONF_RETAIN_ENDED_HOURS, DEFAULT_RETAIN_ENDED_HOURS)): vol.All(int, vol.Range(min=1)),
+        vol.Required(CONF_DEFER_STARTUP_POLL_SECONDS, default=defaults.get(CONF_DEFER_STARTUP_POLL_SECONDS, DEFAULT_DEFER_STARTUP_POLL_SECONDS)): vol.All(int, vol.Range(min=0, max=900)),
     }
     if include_users:
         fields[vol.Required(CONF_ALLOWED_USERS, default=", ".join(defaults.get(CONF_ALLOWED_USERS, DEFAULT_ALLOWED_USERS)))] = str

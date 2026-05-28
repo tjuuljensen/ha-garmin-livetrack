@@ -6,13 +6,6 @@ add_url:
       required: true
       selector:
         text:
-    source:
-      required: false
-      selector:
-        select:
-          options:
-            - service
-            - manual
 stop_session:
   name: Stop Session
   description: Stop one active LiveTrack session.
@@ -34,3 +27,52 @@ reload_users:
 test_notification:
   name: Test Notification
   description: Send a test notification.
+refresh_session:
+  name: Refresh Session
+  description: Force an immediate refresh for one active session.
+  fields:
+    session_id:
+      required: false
+      selector:
+        text:
+    session_id_hash:
+      required: false
+      selector:
+        text:
+refresh_all:
+  name: Refresh All
+  description: Force an immediate refresh for all active sessions.
+cleanup_legacy_entities:
+  name: Cleanup Legacy Entities
+  description: Remove orphaned legacy Garmin LiveTrack entities no longer provided by this integration.
+set_user_policy:
+  name: Set User Policy
+  description: Update user tracking policy (enable/disable and mode).
+  fields:
+    user:
+      required: true
+      selector:
+        text:
+    enabled:
+      required: false
+      selector:
+        boolean:
+    mode:
+      required: false
+      selector:
+        select:
+          options:
+            - normal
+            - register_only
+            - one_event_only
+remove_user:
+  name: Remove User
+  description: Remove a configured user policy entry.
+  fields:
+    user:
+      required: true
+      selector:
+        text:
+list_users:
+  name: List Users
+  description: List configured Garmin LiveTrack users and policy settings.

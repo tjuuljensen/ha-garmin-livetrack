@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any
@@ -109,6 +109,16 @@ def normalize_activity(value: str | None) -> str:
     if not value:
         return "other"
     low = value.strip().lower()
+    if "run" in low:
+        return "running"
+    if "walk" in low or "hike" in low:
+        return "walking"
+    if "cycl" in low or "bike" in low:
+        return "cycling"
+    if "strength" in low or "gym" in low or "weight" in low:
+        return "strength"
+    if "swim" in low:
+        return "swimming"
     aliases = {
         "run": "running",
         "running": "running",
@@ -128,7 +138,7 @@ def parse_garmin_datetime(value: Any) -> datetime | None:
         return None
     if isinstance(value, (int, float)):
         try:
-            return datetime.fromtimestamp(value)
+            return datetime.fromtimestamp(value, tz=UTC)
         except Exception:
             return None
     if isinstance(value, str):

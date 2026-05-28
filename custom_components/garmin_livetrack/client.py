@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ SESSION_PATH_RE = re.compile(r"^/session/([^/\?]+)/token/([^/\?]+)")
 SESSION_QUERY_RE = re.compile(r"^/session/([^/\?]+)$")
 CSRF_META_RE = re.compile(r"<meta[^>]+(?:name|property)=[\"'](?:csrf-token|livetrack-csrf-token)[\"'][^>]+content=[\"']([^\"']+)", re.IGNORECASE)
 NEXT_DATA_RE = re.compile(r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", re.DOTALL)
+NEXT_PUSH_RE = re.compile(r"self\.__next_f\.push\((.*?)\)</script>", re.DOTALL)
 
 
 @dataclass
@@ -115,11 +117,17 @@ class GarminLiveTrackClient:
         return normalized
 
     def normalize_payload(self, session_payload: Any, page_html: str, session_id: str) -> GarminFetchResult:
-        result = GarminFetchResult(ok=False)
+        result = GarminFetchResult(ok=False, source={"trackpoints_source": "none", "session_source": "none"})
         session_obj = self._find_session(session_payload, session_id)
         points = self._find_trackpoints(session_payload)
+        if session_obj:
+            result.source["session_source"] = "api_or_payload"
+        if points:
+            result.source["trackpoints_source"] = "api_or_payload"
         if not points and page_html:
             points = self._extract_next_data_points(page_html)
+            if points:
+                result.source["trackpoints_source"] = "hydration"
         if not session_obj:
             result.errors.append(LiveTrackError("missing_session", "Could not find session", datetime.now(UTC), True))
         if not points:
@@ -132,43 +140,140 @@ class GarminLiveTrackClient:
         return result
 
     def _find_session(self, payload: Any, session_id: str) -> dict[str, Any] | None:
-        if isinstance(payload, dict):
-            if str(payload.get("sessionId", "")) == session_id:
-                return payload
-            for value in payload.values():
-                found = self._find_session(value, session_id)
-                if found:
-                    return found
-        elif isinstance(payload, list):
-            for item in payload:
-                found = self._find_session(item, session_id)
-                if found:
-                    return found
-        return None
+        for item in self._walk_values(payload):
+            if self._looks_like_session(item, session_id):
+                return dict(item)
+        return {}
 
     def _find_trackpoints(self, payload: Any) -> list[dict[str, Any]]:
-        if isinstance(payload, dict):
-            for key, value in payload.items():
-                if key in {"trackPoints", "trackpoints", "points"} and isinstance(value, list):
-                    return [p for p in value if isinstance(p, dict)]
-                found = self._find_trackpoints(value)
-                if found:
-                    return found
-        elif isinstance(payload, list):
-            if payload and all(isinstance(p, dict) for p in payload) and any("dateTime" in p or "position" in p or "fitnessPointData" in p for p in payload):
-                return payload
-            for item in payload:
-                found = self._find_trackpoints(item)
-                if found:
-                    return found
-        return []
+        candidates: list[list[dict[str, Any]]] = []
+        for item in self._walk_values(payload):
+            if self._looks_like_trackpoint_list(item):
+                points = [point for point in item if isinstance(point, dict)]
+                candidates.append(points)
+            elif isinstance(item, dict):
+                for key in ("trackPoints", "trackpoints", "points"):
+                    nested = item.get(key)
+                    if self._looks_like_trackpoint_list(nested):
+                        candidates.append([point for point in nested if isinstance(point, dict)])
+        if not candidates:
+            return []
+        return max(candidates, key=len)
 
     def _extract_next_data_points(self, page_html: str) -> list[dict[str, Any]]:
-        m = NEXT_DATA_RE.search(page_html)
-        if not m:
-            return []
+        for obj in self._extract_hydration_data(page_html):
+            points = self._find_trackpoints(obj)
+            if points:
+                return points
+        return []
+
+    def _extract_next_push_points(self, page_html: str) -> list[dict[str, Any]]:
+        for chunk in NEXT_PUSH_RE.findall(page_html):
+            decoded_chunk = html.unescape(chunk)
+            for string_match in re.finditer(r'"((?:\\.|[^"\\])*)"', decoded_chunk):
+                try:
+                    decoded = json.loads(f'"{string_match.group(1)}"')
+                except json.JSONDecodeError:
+                    continue
+                if "trackPoints" in decoded or "sessionId" in decoded:
+                    for arr in self._extract_json_arrays_by_key(decoded, "trackPoints"):
+                        points = self._find_trackpoints(arr)
+                        if points:
+                            return points
+                    parsed = self._safe_json_load(decoded)
+                    if parsed is not None:
+                        points = self._find_trackpoints(parsed)
+                        if points:
+                            return points
+        return []
+
+    def _extract_hydration_data(self, page_html: str) -> list[Any]:
+        objects = self._load_next_data(page_html)
+        objects.extend(self._extract_json_arrays_by_key(page_html, "trackPoints"))
+        push_points = self._extract_next_push_points(page_html)
+        if push_points:
+            objects.append({"trackPoints": push_points})
+        return objects
+
+    def _load_next_data(self, page_html: str) -> list[Any]:
+        objects: list[Any] = []
+        for match in NEXT_DATA_RE.finditer(page_html):
+            text = html.unescape(match.group(1)).strip()
+            if not text:
+                continue
+            parsed = self._safe_json_load(text)
+            if parsed is not None:
+                objects.append(parsed)
+        return objects
+
+    def _extract_json_arrays_by_key(self, text: str, key: str) -> list[Any]:
+        values: list[Any] = []
+        marker = f'"{key}"'
+        for marker_match in re.finditer(re.escape(marker), text):
+            colon = text.find(":", marker_match.end())
+            if colon == -1:
+                continue
+            start = text.find("[", colon)
+            if start == -1:
+                continue
+            raw_array = self._balanced_json(text, start)
+            if not raw_array:
+                continue
+            parsed = self._safe_json_load(html.unescape(raw_array))
+            if parsed is not None:
+                values.append(parsed)
+        return values
+
+    def _balanced_json(self, text: str, start: int) -> str | None:
+        opening = text[start]
+        closing = "]" if opening == "[" else "}"
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == opening:
+                depth += 1
+            elif char == closing:
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+        return None
+
+    def _walk_values(self, value: Any):
+        yield value
+        if isinstance(value, dict):
+            for child in value.values():
+                yield from self._walk_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from self._walk_values(child)
+
+    def _looks_like_trackpoint(self, value: Any) -> bool:
+        return isinstance(value, dict) and isinstance(value.get("dateTime"), str) and (isinstance(value.get("position"), dict) or isinstance(value.get("fitnessPointData"), dict))
+
+    def _looks_like_trackpoint_list(self, value: Any) -> bool:
+        return isinstance(value, list) and any(self._looks_like_trackpoint(item) for item in value)
+
+    def _looks_like_session(self, value: Any, session_id: str | None) -> bool:
+        if not isinstance(value, dict):
+            return False
+        if session_id and value.get("sessionId") == session_id:
+            return True
+        return bool(value.get("sessionId") and (value.get("start") or value.get("userDisplayName")))
+
+    def _safe_json_load(self, value: str) -> Any | None:
         try:
-            payload = json.loads(m.group(1))
-        except json.JSONDecodeError:
-            return []
-        return self._find_trackpoints(payload)
+            return json.loads(value)
+        except Exception:
+            return None
