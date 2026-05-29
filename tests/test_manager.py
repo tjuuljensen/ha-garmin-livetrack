@@ -15,9 +15,16 @@ class DummyFetch:
     def __init__(self):
         self.ok = True
         self.session = {"sessionId": "abc", "userDisplayName": "Runner", "activityType": "running"}
+        self.source = {"trackpoints_source": "api_or_payload"}
         self.trackpoint_count = 1
+        self.last_trackpoint = {
+            "dateTime": "2026-01-01T00:00:00Z",
+            "position": {"lat": 55.67, "lon": 12.56},
+        }
         self.fetched_at = datetime.now(UTC)
         self.errors = []
+        self.page_status = 200
+        self.api_status = 200
 
 
 class DummyClient:
