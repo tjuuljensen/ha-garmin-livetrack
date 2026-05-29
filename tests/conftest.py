@@ -37,8 +37,8 @@ class _FakeConfigEntries:
 
 
 class _FakeHass:
-    def __init__(self):
-        self.loop = asyncio.get_running_loop()
+    def __init__(self, loop):
+        self.loop = loop
         self.bus = _FakeBus()
         self.services = _FakeServices()
         self.config_entries = _FakeConfigEntries()
@@ -47,9 +47,9 @@ class _FakeHass:
         self.is_running = True
 
     def async_create_task(self, coro):
-        return asyncio.create_task(coro)
+        return self.loop.create_task(coro)
 
 
 @pytest.fixture
-def hass():
-    return _FakeHass()
+async def hass():
+    return _FakeHass(asyncio.get_running_loop())
