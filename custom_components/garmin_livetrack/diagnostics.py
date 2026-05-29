@@ -3,17 +3,21 @@ from .models import stable_session_hash
 
 async def async_get_config_entry_diagnostics(hass, entry):
     manager = entry.runtime_data.manager
+    options = getattr(manager, "options", {}) or {}
+    sessions = getattr(manager, "sessions", {}) or {}
+    ended_sessions = getattr(manager, "ended_sessions", {}) or {}
+    known_users = getattr(manager, "known_users", {}) or {}
     return {
         "options": {
-            **manager.options,
-            "notify_service": "redacted" if manager.options.get("notify_service") else None,
+            **options,
+            "notify_service": "redacted" if options.get("notify_service") else None,
         },
-        "active_session_count": len(manager.sessions),
-        "ended_session_count": len(manager.ended_sessions),
-        "startup_debug": manager.startup_debug,
+        "active_session_count": len(sessions),
+        "ended_session_count": len(ended_sessions),
+        "startup_debug": getattr(manager, "startup_debug", {}),
         "service_shape_change": {
-            "suspected": manager.shape_change_suspected,
-            "consecutive_anomaly_count": manager.shape_change_count,
+            "suspected": getattr(manager, "shape_change_suspected", False),
+            "consecutive_anomaly_count": getattr(manager, "shape_change_count", 0),
         },
         "known_users": [
             {
@@ -24,7 +28,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
                 "first_seen": p.first_seen.isoformat() if p.first_seen else None,
                 "last_seen": p.last_seen.isoformat() if p.last_seen else None,
             }
-            for p in manager.known_users.values()
+            for p in known_users.values()
         ],
         "sessions": [
             {
@@ -36,6 +40,6 @@ async def async_get_config_entry_diagnostics(hass, entry):
                 "trackpoint_count": c.session.trackpoint_count,
                 "error_codes": [e.code for e in c.session.errors],
             }
-            for c in manager.sessions.values()
+            for c in sessions.values()
         ],
     }

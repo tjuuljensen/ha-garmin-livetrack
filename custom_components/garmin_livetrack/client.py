@@ -38,7 +38,14 @@ class GarminFetchResult:
 class GarminLiveTrackClient:
     def __init__(self, hass, session: aiohttp.ClientSession | None = None, request_timeout: int = 20) -> None:
         self.hass = hass
-        self.session = session or aiohttp_client.async_get_clientsession(hass)
+        if session is not None:
+            self.session = session
+        elif hass is not None:
+            self.session = aiohttp_client.async_get_clientsession(hass)
+        else:
+            # Allow parse/normalize-only usage in unit tests without requiring a
+            # Home Assistant instance.
+            self.session = None
         self.request_timeout = request_timeout
 
     def parse_livetrack_identity(self, url: str | None, session_id: str | None = None, token: str | None = None, source: LiveTrackSource = LiveTrackSource.MANUAL) -> LiveTrackIdentity:
@@ -63,6 +70,8 @@ class GarminLiveTrackClient:
         return LiveTrackIdentity(session_id=session_id, token=token, canonical_url=canonical, redacted_url=redact_url(canonical), source=source)
 
     async def fetch(self, identity: LiveTrackIdentity) -> GarminFetchResult:
+        if self.session is None:
+            raise RuntimeError("HTTP session is not configured")
         result = GarminFetchResult(ok=False, source={"session_id": identity.session_id})
         page_html = ""
         csrf = None
