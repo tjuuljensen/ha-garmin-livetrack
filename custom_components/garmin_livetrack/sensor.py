@@ -43,6 +43,42 @@ def _select_session_for_user(manager, key: str):
     return candidates[0]
 
 
+def _select_ended_session_for_user(manager, key: str):
+    candidates = []
+    for sid, session in manager.ended_sessions.items():
+        if key.startswith("session:"):
+            if sid == key.split(":", 1)[1]:
+                candidates.append(session)
+            continue
+        if _user_key(session.garmin_user) == key:
+            candidates.append(session)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda s: (
+            s.actual_end is not None,
+            s.actual_end or s.last_success or s.last_fetch or s.first_seen,
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
+def _select_session_snapshot(manager, key: str):
+    coord = _select_session_for_user(manager, key)
+    if coord is not None:
+        return coord.session, coord
+    ended = _select_ended_session_for_user(manager, key)
+    if ended is not None:
+        return ended, None
+    return None, None
+
+
+class _SessionWrapper:
+    def __init__(self, session):
+        self.session = session
+
+
 def _discover_entity_keys(manager) -> set[str]:
     keys: set[str] = set()
     for name in manager.known_users:
@@ -51,6 +87,12 @@ def _discover_entity_keys(manager) -> set[str]:
             keys.add(key)
     for sid, coord in manager.sessions.items():
         user = (coord.session.garmin_user or "").strip()
+        if user:
+            keys.add(_user_key(user))
+        else:
+            keys.add(f"session:{sid}")
+    for sid, session in manager.ended_sessions.items():
+        user = (session.garmin_user or "").strip()
         if user:
             keys.add(_user_key(user))
         else:
@@ -92,7 +134,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         [
             GarminActiveCountSensor(manager),
             GarminLastErrorSensor(manager),
-            GarminSessionCountSensor(manager),
         ]
     )
 
@@ -137,19 +178,6 @@ class GarminActiveCountSensor(_BaseManagerSensor):
         return len(self.manager.sessions)
 
 
-class GarminSessionCountSensor(_BaseManagerSensor):
-    _attr_name = "Garmin LiveTrack Session Count"
-    _attr_unique_id = "garmin_livetrack_session_count"
-
-    @property
-    def device_info(self):
-        return _integration_device_info()
-
-    @property
-    def native_value(self):
-        return len(self.manager.sessions) + len(self.manager.ended_sessions)
-
-
 class GarminLastErrorSensor(_BaseManagerSensor):
     _attr_name = "Garmin LiveTrack Last Error"
     _attr_unique_id = "garmin_livetrack_last_error"
@@ -172,52 +200,61 @@ class GarminUserStatusSensor(_BaseManagerSensor):
 
     @property
     def name(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return f"Garmin LiveTrack {_entity_label(self.entity_key, coord)} Status"
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        wrapped = coord if coord is not None else (_SessionWrapper(session) if session is not None else None)
+        return f"Garmin LiveTrack {_entity_label(self.entity_key, wrapped)} Status"
 
     @property
     def device_info(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return _device_info(self.entity_key, coord)
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if coord is not None:
+            return _device_info(self.entity_key, coord)
+        if session is not None:
+            return _device_info(self.entity_key, _SessionWrapper(session))
+        return _device_info(self.entity_key, None)
 
     @property
     def available(self):
-        return _select_session_for_user(self.manager, self.entity_key) is not None
+        session, _coord = _select_session_snapshot(self.manager, self.entity_key)
+        return session is not None
 
     @property
     def native_value(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, _coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return "ended"
-        return coord.session.status.value
+        return session.status.value
 
     @property
     def extra_state_attributes(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return {"entity_key": self.entity_key}
-        s = coord.session
+        s = session
         return {
             "entity_key": self.entity_key,
             "session_id_hash": stable_session_hash(s.identity.session_id),
             "url": s.identity.canonical_url,
             "garmin_user": s.garmin_user,
             "activity": s.activity_type,
+            "start": s.start.isoformat() if s.start else None,
+            "expected_end": s.expected_end.isoformat() if s.expected_end else None,
+            "actual_end": s.actual_end.isoformat() if s.actual_end else None,
             "trackpoint_count": s.trackpoint_count,
             "last_fetch": s.last_fetch.isoformat() if s.last_fetch else None,
             "last_success": s.last_success.isoformat() if s.last_success else None,
-            "page_status": coord.last_page_status,
-            "api_status": coord.last_api_status,
-            "trackpoints_source": coord.last_source_branch,
-            "poll_task_alive": bool(coord._task and not coord._task.done()),
+            "page_status": coord.last_page_status if coord else None,
+            "api_status": coord.last_api_status if coord else None,
+            "trackpoints_source": coord.last_source_branch if coord else "ended",
+            "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
         }
 
     @property
     def icon(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, _coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return "mdi:progress-question"
-        status = coord.session.status
+        status = session.status
         if status.value == "fetching":
             return "mdi:cloud-sync-outline"
         if status.value == "waiting_for_trackpoint":

@@ -21,8 +21,11 @@ class _FakeServices:
     def has_service(self, domain, service):
         return (domain, service) in self._registry
 
-    def async_register(self, domain, service, handler):
-        self._registry[(domain, service)] = handler
+    def async_register(self, domain, service, handler, **kwargs):
+        self._registry[(domain, service)] = {
+            "handler": handler,
+            "kwargs": kwargs,
+        }
 
     async def async_call(self, domain, service, payload, blocking=False):
         return None

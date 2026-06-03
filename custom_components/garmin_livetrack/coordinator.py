@@ -741,7 +741,6 @@ class GarminLiveTrackManager:
             if uid in {
                 "garmin_livetrack_active_count",
                 "garmin_livetrack_last_error",
-                "garmin_livetrack_session_count",
                 "garmin_livetrack_any_active",
             }:
                 continue

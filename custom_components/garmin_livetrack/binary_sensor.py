@@ -53,6 +53,48 @@ class GarminAnyActiveBinarySensor(_BaseBinary):
     def is_on(self):
         return any(c.session.status in ACTIVE_STATES for c in self.manager.sessions.values())
 
+    @property
+    def extra_state_attributes(self):
+        active = [
+            c for c in self.manager.sessions.values()
+            if c.session.status in ACTIVE_STATES
+        ]
+        active.sort(
+            key=lambda c: (
+                c.session.last_success is not None,
+                c.session.last_success or c.session.first_seen,
+            ),
+            reverse=True,
+        )
+        summaries = [
+            {
+                "user": c.session.garmin_user or f"session:{stable_session_hash(c.session.identity.session_id)[:8]}",
+                "activity": c.session.activity_type or "other",
+                "status": c.session.status.value,
+                "session_id_hash": stable_session_hash(c.session.identity.session_id),
+            }
+            for c in active
+        ]
+        return {
+            "active_count": len(active),
+            "active_users": [item["user"] for item in summaries],
+            "active_activities": [item["activity"] for item in summaries],
+            "active_summaries": summaries,
+        }
+
+    @property
+    def icon(self):
+        active = [
+            c for c in self.manager.sessions.values()
+            if c.session.status in ACTIVE_STATES
+        ]
+        if not active:
+            return "mdi:map-marker-path"
+        if len(active) == 1:
+            coord = active[0]
+            return activity_icon(coord.session.activity_type, True)
+        return "mdi:map-marker-multiple"
+
 
 class GarminUserActiveBinarySensor(_BaseBinary):
     def __init__(self, manager, entity_key: str):
