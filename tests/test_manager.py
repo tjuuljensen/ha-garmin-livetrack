@@ -208,7 +208,7 @@ async def test_no_end_no_progress_transitions_to_stale(hass):
 @pytest.mark.asyncio
 async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
     base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
-    end_time = base + timedelta(minutes=5)
+    end_time = base - timedelta(minutes=1)
     fetches = [
         SequenceFetch(
             fetched_at=base,
@@ -255,8 +255,6 @@ async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
     coord = LiveTrackSessionCoordinator(m, session)
     m.sessions["ended-1"] = coord
 
-    await coord._refresh_once()
-    assert coord.session.status == LiveTrackStatus.ACTIVE
     await coord._refresh_once()
     assert coord.session.status == LiveTrackStatus.ENDED
     assert coord.end_reason == "session_end"
