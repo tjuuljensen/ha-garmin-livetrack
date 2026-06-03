@@ -4,6 +4,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
+from .icons import activity_icon
 from .models import stable_session_hash
 
 
@@ -77,6 +78,69 @@ def _select_session_snapshot(manager, key: str):
 class _SessionWrapper:
     def __init__(self, session):
         self.session = session
+
+
+def _status_icon(status: str | None) -> str:
+    if status == "fetching":
+        return "mdi:cloud-sync-outline"
+    if status == "waiting_for_trackpoint":
+        return "mdi:timer-sand"
+    if status == "active":
+        return "mdi:signal"
+    if status == "ending":
+        return "mdi:flag-checkered"
+    if status == "ended":
+        return "mdi:check-circle-outline"
+    if status in {"stale", "garmin_error"}:
+        return "mdi:alert-circle-outline"
+    if status in {"expired", "stopped"}:
+        return "mdi:stop-circle-outline"
+    return "mdi:progress-question"
+
+
+def _summary_metrics(session):
+    point = session.last_point
+    if point is None:
+        return {
+            "last_trackpoint_time": None,
+            "distance_km": None,
+            "duration_s": None,
+            "duration_min": None,
+            "speed_kmh": None,
+            "pace_min_per_km": None,
+            "heart_rate_bpm": None,
+            "power_w": None,
+            "altitude_m": None,
+        }
+
+    distance_km = None
+    if point.distance_m is not None:
+        distance_km = round(float(point.distance_m) / 1000.0, 3)
+
+    duration_s = None if point.duration_s is None else float(point.duration_s)
+    duration_min = None if duration_s is None else round(duration_s / 60.0, 1)
+
+    speed_kmh = None
+    if point.speed_mps is not None:
+        speed_kmh = round(float(point.speed_mps) * 3.6, 2)
+
+    pace_min_per_km = None
+    if speed_kmh and speed_kmh > 0:
+        pace_min_per_km = round(60.0 / speed_kmh, 2)
+    elif duration_s and point.distance_m and float(point.distance_m) > 0:
+        pace_min_per_km = round((duration_s / 60.0) / (float(point.distance_m) / 1000.0), 2)
+
+    return {
+        "last_trackpoint_time": point.timestamp.isoformat() if point.timestamp else None,
+        "distance_km": distance_km,
+        "duration_s": duration_s,
+        "duration_min": duration_min,
+        "speed_kmh": speed_kmh,
+        "pace_min_per_km": pace_min_per_km,
+        "heart_rate_bpm": point.heart_rate_bpm,
+        "power_w": point.power_w,
+        "altitude_m": point.altitude_m,
+    }
 
 
 def _discover_entity_keys(manager) -> set[str]:
@@ -231,12 +295,14 @@ class GarminUserStatusSensor(_BaseManagerSensor):
         if not session:
             return {"entity_key": self.entity_key}
         s = session
-        return {
+        attrs = {
             "entity_key": self.entity_key,
             "session_id_hash": stable_session_hash(s.identity.session_id),
             "url": s.identity.canonical_url,
             "garmin_user": s.garmin_user,
             "activity": s.activity_type,
+            "status_icon": _status_icon(s.status.value),
+            "activity_icon": activity_icon(s.activity_type, s.status.value == "active"),
             "start": s.start.isoformat() if s.start else None,
             "expected_end": s.expected_end.isoformat() if s.expected_end else None,
             "actual_end": s.actual_end.isoformat() if s.actual_end else None,
@@ -248,25 +314,12 @@ class GarminUserStatusSensor(_BaseManagerSensor):
             "trackpoints_source": coord.last_source_branch if coord else "ended",
             "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
         }
+        attrs.update(_summary_metrics(s))
+        return attrs
 
     @property
     def icon(self):
         session, _coord = _select_session_snapshot(self.manager, self.entity_key)
         if not session:
             return "mdi:progress-question"
-        status = session.status
-        if status.value == "fetching":
-            return "mdi:cloud-sync-outline"
-        if status.value == "waiting_for_trackpoint":
-            return "mdi:timer-sand"
-        if status.value == "active":
-            return "mdi:signal"
-        if status.value == "ending":
-            return "mdi:flag-checkered"
-        if status.value == "ended":
-            return "mdi:check-circle-outline"
-        if status.value in {"stale", "garmin_error"}:
-            return "mdi:alert-circle-outline"
-        if status.value in {"expired", "stopped"}:
-            return "mdi:stop-circle-outline"
-        return "mdi:progress-question"
+        return _status_icon(session.status.value)
