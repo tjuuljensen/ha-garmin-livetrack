@@ -47,7 +47,7 @@ cleanup_legacy_entities:
   description: Remove orphaned legacy Garmin LiveTrack entities no longer provided by this integration.
 set_user_policy:
   name: Set User Policy
-  description: Update user tracking policy (enable/disable and mode).
+  description: Update user tracking policy, notification routing, and activity overrides.
   fields:
     user:
       required: true
@@ -65,6 +65,22 @@ set_user_policy:
             - normal
             - register_only
             - one_event_only
+    enable_notifications:
+      required: false
+      selector:
+        boolean:
+    notify_service:
+      required: false
+      selector:
+        text:
+    ios_notification_style:
+      required: false
+      selector:
+        boolean:
+    allowed_activities:
+      required: false
+      selector:
+        text:
 remove_user:
   name: Remove User
   description: Remove a configured user policy entry.

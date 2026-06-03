@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.helpers.device_registry import DeviceInfo
 
+from .const import DOMAIN
 from .models import stable_session_hash
 
 
 def _user_key(name: str | None) -> str:
     value = (name or "").strip().lower()
     return value
+
+
+def _integration_device_info() -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, "integration")},
+        name="Garmin LiveTrack",
+        manufacturer="Garmin",
+        model="LiveTrack Integration",
+    )
 
 
 def _select_session_for_user(manager, key: str):
@@ -42,7 +53,36 @@ def _discover_entity_keys(manager) -> set[str]:
         user = (coord.session.garmin_user or "").strip()
         if user:
             keys.add(_user_key(user))
+        else:
+            keys.add(f"session:{sid}")
     return keys
+
+
+def _entity_label(entity_key: str, coord) -> str:
+    user = ((coord.session.garmin_user if coord else "") or "").strip()
+    if user:
+        return user
+    if entity_key.startswith("session:"):
+        return f"Session {stable_session_hash(entity_key.split(':', 1)[1])[:8]}"
+    return entity_key
+
+
+def _device_info(entity_key: str, coord) -> DeviceInfo:
+    label = _entity_label(entity_key, coord)
+    if entity_key.startswith("session:"):
+        sid = entity_key.split(":", 1)[1]
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"session:{sid}")},
+            name=f"Garmin LiveTrack {label}",
+            manufacturer="Garmin",
+            model="LiveTrack Session",
+        )
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"user:{stable_session_hash(entity_key)}")},
+        name=f"Garmin LiveTrack {label}",
+        manufacturer="Garmin",
+        model="LiveTrack User",
+    )
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -89,6 +129,10 @@ class GarminActiveCountSensor(_BaseManagerSensor):
     _attr_unique_id = "garmin_livetrack_active_count"
 
     @property
+    def device_info(self):
+        return _integration_device_info()
+
+    @property
     def native_value(self):
         return len(self.manager.sessions)
 
@@ -98,6 +142,10 @@ class GarminSessionCountSensor(_BaseManagerSensor):
     _attr_unique_id = "garmin_livetrack_session_count"
 
     @property
+    def device_info(self):
+        return _integration_device_info()
+
+    @property
     def native_value(self):
         return len(self.manager.sessions) + len(self.manager.ended_sessions)
 
@@ -105,6 +153,10 @@ class GarminSessionCountSensor(_BaseManagerSensor):
 class GarminLastErrorSensor(_BaseManagerSensor):
     _attr_name = "Garmin LiveTrack Last Error"
     _attr_unique_id = "garmin_livetrack_last_error"
+
+    @property
+    def device_info(self):
+        return _integration_device_info()
 
     @property
     def native_value(self):
@@ -121,9 +173,12 @@ class GarminUserStatusSensor(_BaseManagerSensor):
     @property
     def name(self):
         coord = _select_session_for_user(self.manager, self.entity_key)
-        user = (coord.session.garmin_user if coord else "") or ""
-        user = user.strip()
-        return f"Garmin LiveTrack {(user or self.entity_key)} Status"
+        return f"Garmin LiveTrack {_entity_label(self.entity_key, coord)} Status"
+
+    @property
+    def device_info(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        return _device_info(self.entity_key, coord)
 
     @property
     def available(self):

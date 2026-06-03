@@ -6,7 +6,7 @@ from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from .coordinator import ACTIVE_STATES
 from .icons import activity_icon
 from .models import stable_session_hash
-from .sensor import _discover_entity_keys, _select_session_for_user
+from .sensor import _device_info, _discover_entity_keys, _entity_label, _select_session_for_user
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -45,9 +45,12 @@ class GarminUserTracker(TrackerEntity):
     @property
     def name(self):
         coord = _select_session_for_user(self.manager, self.entity_key)
-        user = (coord.session.garmin_user if coord else "") or ""
-        user = user.strip()
-        return f"Garmin LiveTrack {(user or self.entity_key)}"
+        return f"Garmin LiveTrack {_entity_label(self.entity_key, coord)}"
+
+    @property
+    def device_info(self):
+        coord = _select_session_for_user(self.manager, self.entity_key)
+        return _device_info(self.entity_key, coord)
 
     @property
     def source_type(self):

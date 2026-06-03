@@ -77,7 +77,7 @@ class GarminLiveTrackClient:
         csrf = None
 
         try:
-            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": "HomeAssistant-GarminLiveTrack/0.1.0"}) as resp:
+            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": "HomeAssistant-GarminLiveTrack/0.1.1"}) as resp:
                 result.page_status = resp.status
                 if resp.status >= 400:
                     result.errors.append(LiveTrackError("page_http_error", f"HTTP {resp.status}", datetime.now(UTC), True))
@@ -95,7 +95,7 @@ class GarminLiveTrackClient:
             return result
 
         headers = {
-            "User-Agent": "HomeAssistant-GarminLiveTrack/0.1.0",
+            "User-Agent": "HomeAssistant-GarminLiveTrack/0.1.1",
             "Accept": "application/json, text/plain, */*",
             "Referer": identity.canonical_url,
         }
