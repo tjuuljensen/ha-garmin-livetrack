@@ -151,7 +151,7 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
 
 
 @pytest.mark.asyncio
-async def test_no_end_no_progress_transitions_to_stale(hass):
+async def test_no_end_no_progress_transitions_to_ending_then_ended(hass):
     base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     fetches = [
         SequenceFetch(
@@ -187,8 +187,24 @@ async def test_no_end_no_progress_transitions_to_stale(hass):
                 "duration": 600,
             },
         ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=41),
+            trackpoint_count=1,
+            session={"sessionId": "stale-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
     ]
-    m = GarminLiveTrackManager(hass, SequenceClient(fetches), DummyStore(), {"stale_minutes": 15})
+    m = GarminLiveTrackManager(
+        hass,
+        SequenceClient(fetches),
+        DummyStore(),
+        {"stale_minutes": 15, "finalization_minutes": 20},
+    )
     await m.async_setup()
     identity = LiveTrackIdentity("stale-1", "token", "https://livetrack.garmin.com/session/stale-1/token/token", "redacted", LiveTrackSource.SERVICE)
     session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
@@ -200,9 +216,48 @@ async def test_no_end_no_progress_transitions_to_stale(hass):
     await coord._refresh_once()
     assert coord.session.status == LiveTrackStatus.ACTIVE
     await coord._refresh_once()
-    assert coord.session.status == LiveTrackStatus.STALE
-    assert coord.end_reason == "no_progress"
+    assert coord.session.status == LiveTrackStatus.ENDING
+    assert coord.end_reason == "inactive_no_end"
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ENDED
     assert "stale-1" in m.ended_sessions
+
+
+@pytest.mark.asyncio
+async def test_no_trackpoints_still_transitions_to_stale(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    fetches = [
+        SequenceFetch(
+            fetched_at=base,
+            trackpoint_count=0,
+            session={"sessionId": "empty-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={},
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=26),
+            trackpoint_count=0,
+            session={"sessionId": "empty-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={},
+        ),
+    ]
+    m = GarminLiveTrackManager(
+        hass,
+        SequenceClient(fetches),
+        DummyStore(),
+        {"stale_minutes": 15, "initial_trackpoint_wait_minutes": 10},
+    )
+    await m.async_setup()
+    identity = LiveTrackIdentity("empty-1", "token", "https://livetrack.garmin.com/session/empty-1/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+    m.sessions["empty-1"] = coord
+
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.WAITING_FOR_TRACKPOINT
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.STALE
+    assert coord.end_reason == "no_trackpoints"
+    assert "empty-1" in m.ended_sessions
 
 
 @pytest.mark.asyncio

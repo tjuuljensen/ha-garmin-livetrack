@@ -293,6 +293,7 @@ class LiveTrackSessionCoordinator:
     async def _handle_no_progress(self, now: datetime) -> bool:
         stale_cutoff = timedelta(minutes=int(self.manager.options.get(CONF_STALE_MINUTES, 15)))
         initial_wait = timedelta(minutes=int(self.manager.options.get("initial_trackpoint_wait_minutes", 10)))
+        finalization = timedelta(minutes=int(self.manager.options.get(CONF_FINALIZATION_MINUTES, 10)))
         current_count = self.session.trackpoint_count
         current_ts = self.session.last_point.timestamp if self.session.last_point else None
         ending_inferred = self._safe_is_past(self.session.expected_end, now)
@@ -331,10 +332,19 @@ class LiveTrackSessionCoordinator:
             return False
 
         if now - self._no_progress_since > stale_cutoff:
-            self.session.status = LiveTrackStatus.STALE
-            self.end_reason = "no_progress"
-            await self.manager.async_finalize_session(self, self.end_reason)
-            return True
+            if self.session.status != LiveTrackStatus.ENDING:
+                self.session.status = LiveTrackStatus.ENDING
+                self.end_reason = "inactive_no_end"
+                self._ending_since = self._no_progress_since
+                if now - self._ending_since < finalization:
+                    return False
+            if not hasattr(self, "_ending_since"):
+                self._ending_since = self._no_progress_since
+            if now - self._ending_since >= finalization:
+                self.session.status = LiveTrackStatus.ENDED
+                self.session.actual_end = self._best_end_timestamp(now)
+                await self.manager.async_finalize_session(self, self.end_reason or "inactive_no_end")
+                return True
         return False
 
     def _safe_is_past(self, value: datetime | None, now: datetime) -> bool:
