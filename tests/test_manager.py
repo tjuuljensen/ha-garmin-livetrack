@@ -1,7 +1,7 @@
 import pytest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager
+from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager, LiveTrackSessionCoordinator
 from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBinarySensor
 from custom_components.garmin_livetrack.models import (
     LiveTrackIdentity,
@@ -39,6 +39,29 @@ class DummyClient:
     def parse_livetrack_identity(self, **kwargs):
         return LiveTrackIdentity("abc", "def", "https://livetrack.garmin.com/session/abc/token/def", "https://livetrack.garmin.com/session/abc/token/d...f", kwargs.get("source"))
     async def fetch(self, identity): return DummyFetch()
+
+
+class SequenceFetch:
+    def __init__(self, *, fetched_at, trackpoint_count, session=None, last_trackpoint=None, ok=True):
+        self.ok = ok
+        self.session = session or {}
+        self.source = {"trackpoints_source": "api_or_payload"}
+        self.trackpoint_count = trackpoint_count
+        self.last_trackpoint = last_trackpoint or {}
+        self.fetched_at = fetched_at
+        self.errors = []
+        self.page_status = 200
+        self.api_status = 200
+
+
+class SequenceClient:
+    def __init__(self, fetches):
+        self._fetches = list(fetches)
+
+    async def fetch(self, identity):
+        if not self._fetches:
+            raise AssertionError("No more fetches configured")
+        return self._fetches.pop(0)
 
 
 @pytest.mark.asyncio
@@ -125,3 +148,116 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
     assert attrs["active_users"] == ["Runner"]
     assert attrs["active_activities"] == ["running"]
     assert attrs["active_summaries"][0]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_no_end_no_progress_transitions_to_stale(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    fetches = [
+        SequenceFetch(
+            fetched_at=base,
+            trackpoint_count=1,
+            session={"sessionId": "stale-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=20),
+            trackpoint_count=1,
+            session={"sessionId": "stale-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=36),
+            trackpoint_count=1,
+            session={"sessionId": "stale-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
+    ]
+    m = GarminLiveTrackManager(hass, SequenceClient(fetches), DummyStore(), {"stale_minutes": 15})
+    await m.async_setup()
+    identity = LiveTrackIdentity("stale-1", "token", "https://livetrack.garmin.com/session/stale-1/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+    m.sessions["stale-1"] = coord
+
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ACTIVE
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ACTIVE
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.STALE
+    assert coord.end_reason == "no_progress"
+    assert "stale-1" in m.ended_sessions
+
+
+@pytest.mark.asyncio
+async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    end_time = base + timedelta(minutes=5)
+    fetches = [
+        SequenceFetch(
+            fetched_at=base,
+            trackpoint_count=1,
+            session={
+                "sessionId": "ended-1",
+                "userDisplayName": "Runner",
+                "activityType": "running",
+                "end": end_time.isoformat(),
+            },
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=6),
+            trackpoint_count=1,
+            session={
+                "sessionId": "ended-1",
+                "userDisplayName": "Runner",
+                "activityType": "running",
+                "end": end_time.isoformat(),
+            },
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 1000,
+                "duration": 600,
+            },
+        ),
+    ]
+    m = GarminLiveTrackManager(
+        hass,
+        SequenceClient(fetches),
+        DummyStore(),
+        {"stale_minutes": 2, "finalization_minutes": 1},
+    )
+    await m.async_setup()
+    identity = LiveTrackIdentity("ended-1", "token", "https://livetrack.garmin.com/session/ended-1/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+    m.sessions["ended-1"] = coord
+
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ACTIVE
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ENDED
+    assert coord.end_reason == "session_end"
+    assert "ended-1" in m.ended_sessions

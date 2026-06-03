@@ -295,6 +295,7 @@ class LiveTrackSessionCoordinator:
         initial_wait = timedelta(minutes=int(self.manager.options.get("initial_trackpoint_wait_minutes", 10)))
         current_count = self.session.trackpoint_count
         current_ts = self.session.last_point.timestamp if self.session.last_point else None
+        ending_inferred = self._safe_is_past(self.session.expected_end, now)
 
         progressed = False
         if current_count > self._last_progress_count:
@@ -313,6 +314,8 @@ class LiveTrackSessionCoordinator:
         # No points at all after initial wait + stale window => stale/finalize.
         if current_count == 0:
             age = now - self.session.first_seen
+            if ending_inferred:
+                return False
             if age > (initial_wait + stale_cutoff):
                 self.session.status = LiveTrackStatus.STALE
                 self.end_reason = "no_trackpoints"
@@ -322,6 +325,9 @@ class LiveTrackSessionCoordinator:
 
         if self._no_progress_since is None:
             self._no_progress_since = now
+            return False
+
+        if ending_inferred:
             return False
 
         if now - self._no_progress_since > stale_cutoff:
