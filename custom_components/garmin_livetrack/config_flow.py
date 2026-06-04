@@ -96,10 +96,7 @@ def _global_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Optional(
-                CONF_USER_AGENT,
-                default=defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
-            ): str,
+            vol.Optional(CONF_USER_AGENT): str,
             vol.Required(
                 CONF_NOTIFICATION_START_TEMPLATE,
                 default=defaults.get(
@@ -317,7 +314,10 @@ class GarminLiveTrackConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = _error_key(err)
         return self.async_show_form(
             step_id="user",
-            data_schema=_global_schema({}, include_users=False),
+            data_schema=self.add_suggested_values_to_schema(
+                _global_schema({}, include_users=False),
+                {CONF_USER_AGENT: DEFAULT_USER_AGENT},
+            ),
             errors=errors,
         )
 
@@ -369,11 +369,16 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = _error_key(err)
         return self.async_show_form(
             step_id="init",
-            data_schema=_global_schema(
-                defaults,
-                include_users=True,
-                known_users=known_users,
-                notify_services=self._notify_services(),
+            data_schema=self.add_suggested_values_to_schema(
+                _global_schema(
+                    defaults,
+                    include_users=True,
+                    known_users=known_users,
+                    notify_services=self._notify_services(),
+                ),
+                {
+                    CONF_USER_AGENT: defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
+                },
             ),
             errors=errors,
         )

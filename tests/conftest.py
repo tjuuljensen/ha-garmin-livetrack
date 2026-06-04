@@ -40,6 +40,12 @@ class _FakeServices:
         )
         return None
 
+    def async_services(self):
+        grouped = {}
+        for (domain, service), entry in self._registry.items():
+            grouped.setdefault(domain, {})[service] = entry
+        return grouped
+
 
 class _FakeConfigEntries:
     async def async_unload_platforms(self, entry, platforms):
