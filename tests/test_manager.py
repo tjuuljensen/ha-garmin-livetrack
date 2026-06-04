@@ -284,6 +284,7 @@ async def test_ended_session_summary_persists_across_restore(hass):
     store = DummyStore()
     first = GarminLiveTrackManager(hass, DummyClient(), store, {"retain_ended_hours": 24})
     await first.async_setup()
+    base = datetime.now(UTC) - timedelta(hours=1)
     session = LiveTrackSession(
         identity=LiveTrackIdentity(
             "ended-persist",
@@ -294,14 +295,14 @@ async def test_ended_session_summary_persists_across_restore(hass):
         ),
         garmin_user="Runner",
         activity_type="running",
-        start=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
-        expected_end=datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
-        actual_end=datetime(2026, 1, 1, 10, 45, tzinfo=UTC),
-        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
-        last_fetch=datetime(2026, 1, 1, 10, 46, tzinfo=UTC),
-        last_success=datetime(2026, 1, 1, 10, 46, tzinfo=UTC),
+        start=base,
+        expected_end=base + timedelta(hours=1),
+        actual_end=base + timedelta(minutes=45),
+        first_seen=base,
+        last_fetch=base + timedelta(minutes=46),
+        last_success=base + timedelta(minutes=46),
         last_point=LiveTrackPoint(
-            timestamp=datetime(2026, 1, 1, 10, 45, tzinfo=UTC),
+            timestamp=base + timedelta(minutes=45),
             latitude=55.67,
             longitude=12.56,
             distance_m=5432,
@@ -543,7 +544,7 @@ async def test_no_end_no_progress_transitions_to_ending_then_ended(hass):
         hass,
         SequenceClient(fetches),
         DummyStore(),
-        {"stale_minutes": 15, "finalization_minutes": 20},
+        {"stale_minutes": 15, "finalization_minutes": 20, "retain_ended_hours": 100000},
     )
     await m.async_setup()
     identity = LiveTrackIdentity("stale-1", "token", "https://livetrack.garmin.com/session/stale-1/token/token", "redacted", LiveTrackSource.SERVICE)
@@ -644,7 +645,7 @@ async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
         hass,
         SequenceClient(fetches),
         DummyStore(),
-        {"stale_minutes": 2, "finalization_minutes": 1},
+        {"stale_minutes": 2, "finalization_minutes": 1, "retain_ended_hours": 100000},
     )
     await m.async_setup()
     identity = LiveTrackIdentity("ended-1", "token", "https://livetrack.garmin.com/session/ended-1/token/token", "redacted", LiveTrackSource.SERVICE)
