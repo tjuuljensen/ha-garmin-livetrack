@@ -3,6 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager, LiveTrackSessionCoordinator
 from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBinarySensor
+from custom_components.garmin_livetrack.const import (
+    DEFAULT_NOTIFICATION_END_TEMPLATE,
+    DEFAULT_NOTIFICATION_START_TEMPLATE,
+)
 from custom_components.garmin_livetrack.models import (
     LiveTrackIdentity,
     LiveTrackPoint,
@@ -169,6 +173,123 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
     assert attrs["active_activities"] == ["running"]
     assert attrs["active_summaries"][0]["status"] == "active"
     assert attrs["active_summaries"][0]["source"] == "service"
+
+
+@pytest.mark.asyncio
+async def test_notification_start_template_formats_message(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        DummyClient(),
+        DummyStore(),
+        {
+            "enable_notifications": True,
+            "notify_service": "notify.notify",
+            "notification_start_template": "START {user} {activity} via {source} {session_id_hash}",
+        },
+    )
+    await m.async_setup()
+    await m.async_add_url("https://livetrack.garmin.com/session/abc/token/def", LiveTrackSource.SERVICE)
+
+    assert hass.services.calls
+    call = hass.services.calls[-1]
+    assert call["domain"] == "notify"
+    assert call["service"] == "notify"
+    assert call["payload"]["message"].startswith("START Runner running via service ")
+
+
+@pytest.mark.asyncio
+async def test_notification_end_template_formats_message(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        DummyClient(),
+        DummyStore(),
+        {
+            "enable_notifications": True,
+            "notify_service": "notify.notify",
+            "notification_end_template": "END {user} {activity} {reason} {distance_km} {duration_min}",
+        },
+    )
+    await m.async_setup()
+    identity = LiveTrackIdentity(
+        "ended-session",
+        "token",
+        "https://livetrack.garmin.com/session/ended-session/token/token",
+        "https://livetrack.garmin.com/session/ended-session/token/t...n",
+        LiveTrackSource.SERVICE,
+    )
+    session = LiveTrackSession(
+        identity=identity,
+        garmin_user="Runner",
+        activity_type="running",
+        start=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        expected_end=datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
+        actual_end=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
+        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        last_fetch=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
+        last_success=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
+        last_point=LiveTrackPoint(
+            timestamp=datetime(2026, 1, 1, 11, 4, tzinfo=UTC),
+            distance_m=12345,
+            duration_s=3600,
+        ),
+        trackpoint_count=123,
+        status=LiveTrackStatus.ACTIVE,
+    )
+
+    await m.async_notify_end(session, "inactive_no_end")
+    call = hass.services.calls[-1]
+    assert call["payload"]["message"] == "END Runner running inactive without Garmin END 12.35 60.0"
+
+
+@pytest.mark.asyncio
+async def test_invalid_notification_template_falls_back_to_default(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        DummyClient(),
+        DummyStore(),
+        {
+            "enable_notifications": True,
+            "notify_service": "notify.notify",
+            "notification_start_template": "START {missing}",
+            "notification_end_template": "END {missing}",
+        },
+    )
+    await m.async_setup()
+    await m.async_add_url("https://livetrack.garmin.com/session/abc/token/def", LiveTrackSource.SERVICE)
+    start_call = hass.services.calls[-1]
+    assert start_call["payload"]["message"] == DEFAULT_NOTIFICATION_START_TEMPLATE.format(
+        user="Runner",
+        activity="running",
+    )
+
+    identity = LiveTrackIdentity(
+        "ended-session",
+        "token",
+        "https://livetrack.garmin.com/session/ended-session/token/token",
+        "https://livetrack.garmin.com/session/ended-session/token/t...n",
+        LiveTrackSource.SERVICE,
+    )
+    session = LiveTrackSession(
+        identity=identity,
+        garmin_user="Runner",
+        activity_type="running",
+        start=None,
+        expected_end=None,
+        actual_end=None,
+        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        last_fetch=None,
+        last_success=None,
+        last_point=None,
+        trackpoint_count=0,
+        status=LiveTrackStatus.ACTIVE,
+    )
+    await m.async_notify_end(session, "session_end")
+    end_call = hass.services.calls[-1]
+    assert end_call["payload"]["message"] == DEFAULT_NOTIFICATION_END_TEMPLATE.format(
+        user="Runner",
+        activity="running",
+        reason="Garmin session end",
+    )
 
 
 @pytest.mark.asyncio
