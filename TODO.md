@@ -59,14 +59,13 @@
 - [DONE] `garmin_livetrack.cleanup_legacy_entities` helper service
 - [DONE] `sensor.garmin_livetrack_session_count` removed
 - [DONE] Aggregate active-session summaries on `binary_sensor.garmin_livetrack_any_active`
-- [PENDING] Add one-time entity-registry migration strategy for superseded unique IDs if still needed
-- [PENDING] Add cleanup/migration tests that verify active entities are not removed
+- [PENDING] Add cleanup tests that verify active entities are not removed
 
 ## Protocol
 - [DONE] Page-first fetch plus API fetch with hydration fallback
 - [DONE] Configurable HTTP User-Agent with validation
 - [DONE] Common User-Agent documentation and examples
-- [PENDING] Add focused tests around the configurable User-Agent path
+- [DONE] Add focused tests around the configurable User-Agent path
 
 ## Tests
 - [DONE] Case-insensitive user matching tests
@@ -90,4 +89,4 @@
 - [DONE] Notification template customization documented
 - [DONE] HTTP User-Agent option documented
 - [DONE] Local Windows and Linux test scripts documented
-- [PENDING] Add a short cleanup/migration guide for entity-registry transitions if the migration strategy changes
+- [DONE] Cleanup guidance reframed as generic entity-registry cleanup documentation

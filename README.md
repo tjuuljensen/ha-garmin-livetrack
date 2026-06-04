@@ -5,7 +5,7 @@ Home Assistant custom integration for Garmin LiveTrack session monitoring.
 The integration accepts Garmin LiveTrack URLs from Home Assistant services and IMAP events, tracks one or more sessions independently, restores recoverable sessions after restart, exposes stable user devices and global health entities, and keeps Garmin tokens out of normal logs, diagnostics, and non-storage state.
 
 ## Status
-Current version: `0.1.1`
+Current version: `0.1.2`
 
 Implemented:
 - UI setup through Home Assistant config entries
@@ -23,7 +23,7 @@ Implemented:
 Remaining work is mainly:
 - test coverage expansion
 - a few remaining lifecycle edge cases
-- entity-registry cleanup/migration polish
+- entity-registry cleanup polish
 
 ## Important Warning
 Garmin LiveTrack is not a documented public API. Garmin can change the public page structure, hydration payloads, or API response shape without notice. This integration is built defensively, but Garmin-side changes can still affect session parsing or trackpoint extraction.
@@ -137,7 +137,7 @@ If a template is invalid, the integration falls back to the built-in default and
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
-- `HomeAssistant-GarminLiveTrack/0.1.1`
+- `HomeAssistant-GarminLiveTrack/0.1.2`
 
 Typical reasons to change it:
 - Garmin behaves differently for different clients
@@ -152,7 +152,7 @@ Recommended approach:
 
 Common examples:
 - integration default:
-  - `HomeAssistant-GarminLiveTrack/0.1.1`
+  - `HomeAssistant-GarminLiveTrack/0.1.2`
 - Windows Chrome:
   - `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36`
 - macOS Safari:
@@ -221,7 +221,7 @@ Remove a known user policy.
 Return known users plus stored and effective policy information.
 
 ### `garmin_livetrack.cleanup_legacy_entities`
-Remove orphaned legacy Garmin LiveTrack entities that are no longer provided by the integration.
+Remove orphaned Garmin LiveTrack entity-registry entries that are no longer provided by the integration.
 
 ## Entities
 ### Global entities
@@ -400,15 +400,6 @@ This means:
 - the token remains sensitive in logs and diagnostics, but not in the status-entity URL field
 - dashboard exposure of the URL is an explicit trust decision by the operator
 
-## Migration
-1. Disable the old Garmin LiveTrack YAML package.
-2. Remove or recorder-exclude old helper entities if they still exist.
-3. Restart Home Assistant.
-4. Add the custom integration.
-5. Configure IMAP ingestion if required.
-6. Test with `garmin_livetrack.add_url`.
-7. Run `garmin_livetrack.cleanup_legacy_entities` if legacy registry entries remain.
-
 ## Troubleshooting
 ### `Config flow could not be loaded`
 Restart Home Assistant after updating the custom integration. Ensure the full updated custom component is deployed before retrying.
@@ -432,6 +423,13 @@ Confirm:
 - the IMAP integration is firing `imap_content`
 - the event body contains a Garmin URL
 - quoted-printable soft line breaks are removed
+
+### Stale entity-registry entries
+If Home Assistant still shows Garmin LiveTrack entities that this integration no longer provides, run:
+
+- `garmin_livetrack.cleanup_legacy_entities`
+
+This is an optional cleanup utility. It is useful when stale entity-registry entries remain from earlier integration iterations or different unique-ID schemes.
 
 ### Invalid URL
 Only Garmin LiveTrack URLs hosted on `livetrack.garmin.com` are accepted.

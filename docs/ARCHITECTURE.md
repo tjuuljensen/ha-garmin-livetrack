@@ -1,4 +1,4 @@
-# Garmin LiveTrack Architecture And Implementation Plan
+# Garmin LiveTrack Integration Architecture
 
 ## Purpose
 This document describes the current architecture, operational model, and remaining implementation work for the `garmin_livetrack` integration.
@@ -239,10 +239,10 @@ The following decisions are currently intentional and closed:
 - shape-change repair-signal transition tests
 - configurable User-Agent tests
 
-### Cleanup and migration
-- evaluate whether a one-time entity-registry migration strategy is still needed
-- add cleanup/migration tests if that path remains relevant
+### Entity-registry cleanup
+- keep `garmin_livetrack.cleanup_legacy_entities` as an optional stale-registry cleanup tool
+- add cleanup tests that verify active entities are not removed
 
 ### Documentation
 - keep README and TODO aligned with runtime behavior
-- add focused migration guidance if entity-registry migration changes
+- keep cleanup guidance framed around generic entity-registry cleanup rather than one specific prior setup
