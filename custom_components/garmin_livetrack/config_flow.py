@@ -96,7 +96,7 @@ def _global_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_USER_AGENT,
                 default=defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
             ): str,

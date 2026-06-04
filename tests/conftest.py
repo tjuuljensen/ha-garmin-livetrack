@@ -63,6 +63,9 @@ class _FakeHass:
     def async_create_task(self, coro):
         return self.loop.create_task(coro)
 
+    def verify_event_loop_thread(self, _what):
+        return None
+
 
 @pytest.fixture
 async def hass():
