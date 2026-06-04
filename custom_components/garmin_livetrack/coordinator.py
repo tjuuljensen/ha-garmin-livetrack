@@ -135,7 +135,7 @@ class LiveTrackSessionCoordinator:
             return
         self._stop.clear()
         self.manager.startup_debug[f"poller_start_{stable_session_hash(self.session.identity.session_id)}"] = datetime.now(UTC).isoformat()
-        _LOGGER.warning(
+        _LOGGER.debug(
             "Garmin LiveTrack startup diag: starting poller for session=%s source=%s user=%s",
             stable_session_hash(self.session.identity.session_id),
             self.session.identity.source.value,
@@ -234,7 +234,7 @@ class LiveTrackSessionCoordinator:
             if first_success and not self._logged_first_success:
                 self._logged_first_success = True
                 self.manager.startup_debug[f"first_success_{stable_session_hash(self.session.identity.session_id)}"] = fetch.fetched_at.isoformat()
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Garmin LiveTrack startup diag: first fetch success for session=%s status=%s trackpoints=%s source=%s user=%s",
                     stable_session_hash(self.session.identity.session_id),
                     self.session.status.value,
@@ -636,7 +636,7 @@ class GarminLiveTrackManager:
                 coord = LiveTrackSessionCoordinator(self, session)
                 self.sessions[sid] = coord
                 self.startup_debug[f"restored_session_{stable_session_hash(sid)}"] = session.identity.source.value
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Garmin LiveTrack startup diag: restored session=%s source=%s user=%s status=%s",
                     stable_session_hash(sid),
                     session.identity.source.value,

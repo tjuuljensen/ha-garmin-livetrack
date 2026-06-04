@@ -40,14 +40,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     storage = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     manager = GarminLiveTrackManager(hass, GarminLiveTrackClient(hass, session), storage, {**entry.data, **entry.options})
     manager.startup_debug["setup_entry_started"] = datetime.now(UTC).isoformat()
-    _LOGGER.warning("Garmin LiveTrack startup diag: setup_entry started")
+    _LOGGER.debug("Garmin LiveTrack startup diag: setup_entry started")
     await manager.async_setup()
     manager.startup_debug["manager_setup_done"] = datetime.now(UTC).isoformat()
-    _LOGGER.warning("Garmin LiveTrack startup diag: manager setup done")
+    _LOGGER.debug("Garmin LiveTrack startup diag: manager setup done")
     restored = await manager.async_restore_sessions_from_storage()
     manager.startup_debug["restore_sessions_done"] = datetime.now(UTC).isoformat()
     manager.startup_debug["restore_sessions_count"] = restored
-    _LOGGER.warning("Garmin LiveTrack startup diag: restored %s session(s) from storage", restored)
+    _LOGGER.debug("Garmin LiveTrack startup diag: restored %s session(s) from storage", restored)
 
     runtime = IntegrationRuntimeData(manager=manager, storage=storage)
     entry.runtime_data = runtime
@@ -63,7 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime.unsub_options_update_listener = entry.add_update_listener(_options_updated)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     manager.startup_debug["platform_forward_done"] = datetime.now(UTC).isoformat()
-    _LOGGER.warning("Garmin LiveTrack startup diag: platform setup forwarded")
+    _LOGGER.debug("Garmin LiveTrack startup diag: platform setup forwarded")
     def _schedule_task(coro) -> None:
         """Schedule a coroutine from any callback thread safely."""
         hass.loop.call_soon_threadsafe(hass.async_create_task, coro)
@@ -75,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         runtime.recovery_attempts += 1
         delay = int(manager.options.get(CONF_DEFER_STARTUP_POLL_SECONDS, DEFAULT_DEFER_STARTUP_POLL_SECONDS))
         manager.startup_debug["defer_startup_poll_seconds"] = delay
-        _LOGGER.warning(
+        _LOGGER.debug(
             "Garmin LiveTrack startup diag: recovery attempt %s started, defer=%ss",
             runtime.recovery_attempts,
             delay,
@@ -84,7 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             started = await manager.async_start_restored_pollers()
             manager.startup_debug["restored_pollers_started"] = datetime.now(UTC).isoformat()
             manager.startup_debug["restored_pollers_started_count"] = started
-            _LOGGER.warning("Garmin LiveTrack startup diag: started %s restored poller(s) immediately", started)
+            _LOGGER.debug("Garmin LiveTrack startup diag: started %s restored poller(s) immediately", started)
         else:
             async_call_later(
                 hass,
@@ -92,19 +92,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 lambda _now: _schedule_task(_start_restored_pollers_with_debug()),
             )
             manager.startup_debug["restored_pollers_scheduled_for"] = datetime.now(UTC).isoformat()
-            _LOGGER.warning("Garmin LiveTrack startup diag: scheduled restored pollers in %ss", delay)
+            _LOGGER.debug("Garmin LiveTrack startup diag: scheduled restored pollers in %ss", delay)
         # Keep startup lightweight: avoid long synchronous fetch passes here.
         # Restored pollers will fetch on their own loop.
         runtime.recovery_complete = True
         manager.startup_debug["recovery_once_completed"] = datetime.now(UTC).isoformat()
-        _LOGGER.warning("Garmin LiveTrack startup diag: recovery scheduling completed")
+        _LOGGER.debug("Garmin LiveTrack startup diag: recovery scheduling completed")
 
     async def _start_restored_pollers_with_debug() -> None:
         manager.startup_debug["restored_pollers_start_task_fired"] = datetime.now(UTC).isoformat()
         started = await manager.async_start_restored_pollers()
         manager.startup_debug["restored_pollers_started_count"] = started
         manager.startup_debug["restored_pollers_started_at"] = datetime.now(UTC).isoformat()
-        _LOGGER.warning("Garmin LiveTrack startup diag: delayed start launched %s restored poller(s)", started)
+        _LOGGER.debug("Garmin LiveTrack startup diag: delayed start launched %s restored poller(s)", started)
 
     if hass.is_running:
         hass.async_create_task(_run_recovery_once())
