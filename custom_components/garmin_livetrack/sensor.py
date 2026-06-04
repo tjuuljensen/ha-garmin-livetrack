@@ -254,6 +254,13 @@ class GarminLastErrorSensor(_BaseManagerSensor):
     def native_value(self):
         return self.manager.last_error or "none"
 
+    @property
+    def extra_state_attributes(self):
+        return {
+            "shape_change_suspected": bool(getattr(self.manager, "shape_change_suspected", False)),
+            "shape_change_count": int(getattr(self.manager, "shape_change_count", 0) or 0),
+        }
+
 
 class GarminUserStatusSensor(_BaseManagerSensor):
     def __init__(self, manager, entity_key: str):

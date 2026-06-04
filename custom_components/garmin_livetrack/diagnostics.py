@@ -19,6 +19,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "service_shape_change": {
             "suspected": getattr(manager, "shape_change_suspected", False),
             "consecutive_anomaly_count": getattr(manager, "shape_change_count", 0),
+            "issue_expected": bool(getattr(manager, "shape_change_suspected", False)),
         },
         "known_users": [
             {

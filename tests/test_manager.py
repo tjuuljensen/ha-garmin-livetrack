@@ -41,12 +41,18 @@ class DummyFetch:
 
 
 class DummyClient:
+    def __init__(self):
+        self.user_agent = None
+
     def parse_livetrack_identity(self, **kwargs):
         return LiveTrackIdentity("abc", "def", "https://livetrack.garmin.com/session/abc/token/def", "https://livetrack.garmin.com/session/abc/token/d...f", kwargs.get("source"))
     async def fetch(self, identity): return DummyFetch()
 
 
 class UrlAwareDummyClient:
+    def __init__(self):
+        self.user_agent = None
+
     def parse_livetrack_identity(self, **kwargs):
         url = kwargs.get("url") or ""
         match = re.search(r"/session/([^/?]+)/token/([^/?]+)", url)
@@ -121,6 +127,31 @@ async def test_configured_user_agent_is_applied_to_client(hass):
     m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {"user_agent": "CustomUA/2.0"})
     await m.async_setup()
     assert m.client.user_agent == "CustomUA/2.0"
+
+
+@pytest.mark.asyncio
+async def test_shape_change_signal_syncs_repair_issue(monkeypatch, hass):
+    calls = []
+
+    from custom_components.garmin_livetrack import coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_sync_shape_change_issue",
+        lambda hass_arg, suspected, consecutive_anomaly_count: calls.append(
+            {
+                "suspected": suspected,
+                "count": consecutive_anomaly_count,
+            }
+        ),
+    )
+
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
+    m.shape_change_suspected = True
+    m.shape_change_count = 3
+    await m._update_shape_change_signal()
+
+    assert calls == [{"suspected": True, "count": 3}]
 
 
 @pytest.mark.asyncio

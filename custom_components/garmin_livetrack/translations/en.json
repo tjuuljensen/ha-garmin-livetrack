@@ -110,5 +110,11 @@
             "invalid_user_agent": "User-Agent must be non-empty and 256 characters or fewer",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
+    },
+    "issues": {
+        "garmin_shape_change_suspected": {
+            "title": "Garmin LiveTrack response shape may have changed",
+            "description": "Garmin LiveTrack returned repeated missing session or missing trackpoint responses. The integration has seen {count} consecutive anomaly signal(s), which often means Garmin changed the public site or API response shape. Check diagnostics, verify the configured HTTP User-Agent, and compare with a working LiveTrack in a browser before assuming the activity itself is gone."
+        }
     }
 }

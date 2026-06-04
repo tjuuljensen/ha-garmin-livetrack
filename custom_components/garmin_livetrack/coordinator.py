@@ -58,6 +58,7 @@ from .models import (
     parse_garmin_datetime,
     stable_session_hash,
 )
+from .repairs import async_sync_shape_change_issue
 
 URL_RE = re.compile(r"https://livetrack\.garmin\.com/session/[^\"'>\s]+", re.IGNORECASE)
 _LOGGER = logging.getLogger(__name__)
@@ -195,14 +196,26 @@ class LiveTrackSessionCoordinator:
         if fetch.errors:
             self.manager.last_error = fetch.errors[-1].code
             codes = {e.code for e in fetch.errors}
+            shape_signal_changed = False
             if "missing_session" in codes or "missing_trackpoints" in codes:
                 self.manager.shape_change_count += 1
                 if self.manager.shape_change_count >= 3:
-                    self.manager.shape_change_suspected = True
+                    if not self.manager.shape_change_suspected:
+                        self.manager.shape_change_suspected = True
+                        shape_signal_changed = True
             else:
-                self.manager.shape_change_count = 0
+                if self.manager.shape_change_count or self.manager.shape_change_suspected:
+                    self.manager.shape_change_count = 0
+                    if self.manager.shape_change_suspected:
+                        self.manager.shape_change_suspected = False
+                    shape_signal_changed = True
+            if shape_signal_changed:
+                await self.manager._update_shape_change_signal()
         elif self.manager.shape_change_count:
             self.manager.shape_change_count = max(0, self.manager.shape_change_count - 1)
+            if self.manager.shape_change_count == 0 and self.manager.shape_change_suspected:
+                self.manager.shape_change_suspected = False
+                await self.manager._update_shape_change_signal()
 
         if fetch.ok:
             first_success = self.session.last_success is None
@@ -449,6 +462,14 @@ class GarminLiveTrackManager:
         for listener in list(self._listeners):
             listener()
 
+    async def _update_shape_change_signal(self) -> None:
+        async_sync_shape_change_issue(
+            self.hass,
+            suspected=self.shape_change_suspected,
+            consecutive_anomaly_count=self.shape_change_count,
+        )
+        self._notify_listeners()
+
     def _effective_user_agent(self) -> str:
         value = str(self.options.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT).strip()
         return value or DEFAULT_USER_AGENT
@@ -490,6 +511,7 @@ class GarminLiveTrackManager:
         self._apply_option_user_policies()
         self._register_services()
         await self._update_imap_listener()
+        await self._update_shape_change_signal()
 
     async def async_unload(self):
         if self.unsub_imap_listener:

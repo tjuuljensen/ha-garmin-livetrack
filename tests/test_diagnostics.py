@@ -17,6 +17,8 @@ async def test_diagnostics_redacts_notify(hass):
             "sessions": {},
             "ended_sessions": {},
             "known_users": {},
+            "shape_change_suspected": True,
+            "shape_change_count": 4,
             "_effective_user_agent": lambda self: "CustomUA/2.0",
         },
     )()
@@ -24,3 +26,6 @@ async def test_diagnostics_redacts_notify(hass):
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["options"]["notify_service"] == "redacted"
     assert data["effective_user_agent"] == "CustomUA/2.0"
+    assert data["service_shape_change"]["suspected"] is True
+    assert data["service_shape_change"]["consecutive_anomaly_count"] == 4
+    assert data["service_shape_change"]["issue_expected"] is True
