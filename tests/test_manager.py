@@ -1,5 +1,6 @@
 import pytest
 from datetime import UTC, datetime, timedelta
+import re
 
 from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager, LiveTrackSessionCoordinator
 from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBinarySensor
@@ -43,6 +44,30 @@ class DummyClient:
     def parse_livetrack_identity(self, **kwargs):
         return LiveTrackIdentity("abc", "def", "https://livetrack.garmin.com/session/abc/token/def", "https://livetrack.garmin.com/session/abc/token/d...f", kwargs.get("source"))
     async def fetch(self, identity): return DummyFetch()
+
+
+class UrlAwareDummyClient:
+    def parse_livetrack_identity(self, **kwargs):
+        url = kwargs.get("url") or ""
+        match = re.search(r"/session/([^/?]+)/token/([^/?]+)", url)
+        session_id = match.group(1) if match else "abc"
+        token = match.group(2) if match else "def"
+        return LiveTrackIdentity(
+            session_id,
+            token,
+            f"https://livetrack.garmin.com/session/{session_id}/token/{token}",
+            f"https://livetrack.garmin.com/session/{session_id}/token/{token[:1]}...{token[-1:]}",
+            kwargs.get("source"),
+        )
+
+    async def fetch(self, identity):
+        fetch = DummyFetch()
+        fetch.session = {
+            "sessionId": identity.session_id,
+            "userDisplayName": "Runner",
+            "activityType": "running",
+        }
+        return fetch
 
 
 class SequenceFetch:
@@ -89,6 +114,82 @@ async def test_case_insensitive_user_policy_lookup(hass):
     users = await m.async_list_users()
     assert users[0]["name"] == "TeeJay"
     assert users[0]["activity_policy_mode"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_strict_false_registers_unknown_user_and_tracks_immediately(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        UrlAwareDummyClient(),
+        DummyStore(),
+        {"strict_users": False, "accept_first_seen_users": False},
+    )
+    await m.async_setup()
+
+    result = await m.async_add_url(
+        "https://livetrack.garmin.com/session/session-1/token/token-1",
+        LiveTrackSource.SERVICE,
+    )
+
+    assert result.ok is True
+    assert "runner" in m.known_users
+    assert m.known_users["runner"].enabled is True
+    assert m.known_users["runner"].mode == "normal"
+    assert "session-1" in m.sessions
+
+
+@pytest.mark.asyncio
+async def test_strict_true_rejects_unknown_user_when_accept_first_false(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        UrlAwareDummyClient(),
+        DummyStore(),
+        {"strict_users": True, "accept_first_seen_users": False},
+    )
+    await m.async_setup()
+
+    result = await m.async_add_url(
+        "https://livetrack.garmin.com/session/session-2/token/token-2",
+        LiveTrackSource.SERVICE,
+    )
+
+    assert result.ok is False
+    assert result.status == LiveTrackStatus.REJECTED_USER
+    assert "runner" in m.known_users
+    assert m.known_users["runner"].enabled is False
+    assert m.known_users["runner"].mode == "register_only"
+    assert m.known_users["runner"].first_event_consumed is False
+    assert "session-2" not in m.sessions
+
+
+@pytest.mark.asyncio
+async def test_strict_true_accept_first_allows_one_event_then_rejects_later(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        UrlAwareDummyClient(),
+        DummyStore(),
+        {"strict_users": True, "accept_first_seen_users": True},
+    )
+    await m.async_setup()
+
+    first = await m.async_add_url(
+        "https://livetrack.garmin.com/session/session-3/token/token-3",
+        LiveTrackSource.SERVICE,
+    )
+    assert first.ok is True
+    assert "runner" in m.known_users
+    assert m.known_users["runner"].enabled is False
+    assert m.known_users["runner"].mode == "one_event_only"
+    assert m.known_users["runner"].first_event_consumed is True
+    assert "session-3" in m.sessions
+
+    second = await m.async_add_url(
+        "https://livetrack.garmin.com/session/session-4/token/token-4",
+        LiveTrackSource.SERVICE,
+    )
+    assert second.ok is False
+    assert second.status == LiveTrackStatus.REJECTED_USER
+    assert "session-4" not in m.sessions
 
 
 @pytest.mark.asyncio
@@ -459,3 +560,42 @@ async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
     assert coord.end_reason == "session_end"
     assert coord.session.end_reason == "session_end"
     assert "ended-1" in m.ended_sessions
+
+
+@pytest.mark.asyncio
+async def test_cleanup_legacy_entities_removes_deprecated_session_count(monkeypatch, hass):
+    class FakeEntry:
+        def __init__(self, entity_id, unique_id, platform="garmin_livetrack", disabled_by=None):
+            self.entity_id = entity_id
+            self.unique_id = unique_id
+            self.platform = platform
+            self.disabled_by = disabled_by
+
+    class FakeRegistry:
+        def __init__(self):
+            self.entities = {
+                "keep_active_count": FakeEntry(
+                    "sensor.garmin_livetrack_active_count",
+                    "garmin_livetrack_active_count",
+                ),
+                "remove_session_count": FakeEntry(
+                    "sensor.garmin_livetrack_session_count",
+                    "garmin_livetrack_session_count",
+                ),
+            }
+            self.removed = []
+
+        def async_remove(self, entity_id):
+            self.removed.append(entity_id)
+
+    fake_registry = FakeRegistry()
+
+    from custom_components.garmin_livetrack import coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module.er, "async_get", lambda _hass: fake_registry)
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
+    await m.async_setup()
+    count = await m.async_cleanup_legacy_entities()
+
+    assert count == 1
+    assert fake_registry.removed == ["sensor.garmin_livetrack_session_count"]
