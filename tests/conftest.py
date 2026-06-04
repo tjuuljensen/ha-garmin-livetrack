@@ -17,6 +17,7 @@ class _FakeBus:
 class _FakeServices:
     def __init__(self):
         self._registry = {}
+        self.calls = []
 
     def has_service(self, domain, service):
         return (domain, service) in self._registry
@@ -28,6 +29,14 @@ class _FakeServices:
         }
 
     async def async_call(self, domain, service, payload, blocking=False):
+        self.calls.append(
+            {
+                "domain": domain,
+                "service": service,
+                "payload": payload,
+                "blocking": blocking,
+            }
+        )
         return None
 
 
