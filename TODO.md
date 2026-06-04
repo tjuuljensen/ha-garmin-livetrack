@@ -39,6 +39,7 @@
 - [DONE] Fetch-ok inactive sessions can finalize through `ending` with `inactive_no_end`
 - [DONE] End reason is retained on finalized sessions
 - [DONE] Per-user status sensors retain ended-session state and summary values during retention
+- [DONE] Retained ended-session summaries persist across Home Assistant restarts
 - [PENDING] Cover true discarded/no-data no-END edge cases more deeply
 - [PENDING] Add test coverage for end-notification wording/fallback around `inactive_no_end`
 
@@ -73,6 +74,7 @@
 - [DONE] Notification template formatting/fallback tests
 - [DONE] Activity filter acceptance tests
 - [DONE] Ended-session retention tests
+- [DONE] Ended-session restore persistence tests
 - [DONE] Aggregate active-session attribute tests
 - [DONE] Cleanup regression test for deprecated `session_count`
 - [PENDING] Options-flow tests for user policy editing

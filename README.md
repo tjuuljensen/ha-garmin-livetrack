@@ -244,7 +244,7 @@ Each known Garmin user gets a stable Home Assistant device with:
 - active binary sensor
 - device tracker
 
-The per-user status sensor retains the most recent ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops.
+The per-user status sensor retains the most recent ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops. Retained ended-session summaries are stored and restored across Home Assistant restarts.
 
 ### Session fallback device
 If a session becomes active before Garmin returns a user display name, the integration can use a temporary session-based fallback device until a user identity is known.
@@ -271,13 +271,14 @@ LiveTrack URLs can come from:
 Each active session runs independently through its own coordinator/task.
 
 ### Storage and recovery
-Active or recoverable sessions are stored in Home Assistant storage with the token kept only there for restart recovery.
+Active or recoverable sessions are stored in Home Assistant storage with the token kept only there for restart recovery. Retained ended-session summaries are also stored so per-user status sensors can keep showing the last finished activity after a restart.
 
 Startup flow:
 1. load storage
-2. rebuild recoverable sessions
-3. defer restored polling by the configured startup delay
-4. start restored session pollers independently
+2. rebuild recoverable active sessions
+3. restore retained ended-session summaries
+4. defer restored polling by the configured startup delay
+5. start restored session pollers independently
 
 ### Notification flow
 Notification routing is resolved in this order:
@@ -389,6 +390,8 @@ Rules:
 - do not include raw token in notifications
 - persist token only in Home Assistant storage for restart recovery
 
+Retained ended-session summaries store the canonical URL so the status sensor can continue to expose the full URL after restart. This follows the same operator-visible URL policy used by live status entities.
+
 ### Coordinates
 Coordinates are intentionally exposed through the device tracker because location tracking is a core function of the integration. They are not duplicated into diagnostics.
 
@@ -477,4 +480,4 @@ bash ./scripts/test-local.sh --python python3.12
 
 ## Additional Documentation
 - [TODO.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\TODO.md)
-- [docs/architecture-implementation-plan.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\architecture-implementation-plan.md)
+- [docs/ARCHITECTURE.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\ARCHITECTURE.md)

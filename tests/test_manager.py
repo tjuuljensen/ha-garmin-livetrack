@@ -277,6 +277,65 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
     assert attrs["heart_rate_bpm"] == 150
     assert attrs["activity_icon"] == "mdi:run"
     assert attrs["status_icon"] == "mdi:check-circle-outline"
+
+
+@pytest.mark.asyncio
+async def test_ended_session_summary_persists_across_restore(hass):
+    store = DummyStore()
+    first = GarminLiveTrackManager(hass, DummyClient(), store, {"retain_ended_hours": 24})
+    await first.async_setup()
+    session = LiveTrackSession(
+        identity=LiveTrackIdentity(
+            "ended-persist",
+            "secret-token",
+            "https://livetrack.garmin.com/session/ended-persist/token/secret-token",
+            "https://livetrack.garmin.com/session/ended-persist/token/sec...ken",
+            LiveTrackSource.SERVICE,
+        ),
+        garmin_user="Runner",
+        activity_type="running",
+        start=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        expected_end=datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
+        actual_end=datetime(2026, 1, 1, 10, 45, tzinfo=UTC),
+        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+        last_fetch=datetime(2026, 1, 1, 10, 46, tzinfo=UTC),
+        last_success=datetime(2026, 1, 1, 10, 46, tzinfo=UTC),
+        last_point=LiveTrackPoint(
+            timestamp=datetime(2026, 1, 1, 10, 45, tzinfo=UTC),
+            latitude=55.67,
+            longitude=12.56,
+            distance_m=5432,
+            duration_s=1800,
+            speed_mps=3.0,
+            heart_rate_bpm=142,
+        ),
+        trackpoint_count=42,
+        status=LiveTrackStatus.ENDED,
+        end_reason="inactive_no_end",
+        notification_started_sent=True,
+        notification_ended_sent=True,
+    )
+    first.ended_sessions["ended-persist"] = session
+    await first.async_save_storage()
+
+    restored = GarminLiveTrackManager(hass, DummyClient(), store, {"retain_ended_hours": 24})
+    await restored.async_setup()
+    await restored.async_restore_sessions_from_storage()
+
+    assert restored.sessions == {}
+    restored_session = restored.ended_sessions["ended-persist"]
+    assert restored_session.identity.token == ""
+    assert restored_session.garmin_user == "Runner"
+    assert restored_session.end_reason == "inactive_no_end"
+    assert restored_session.last_point is not None
+    assert restored_session.last_point.distance_m == 5432
+
+    sensor = GarminUserStatusSensor(restored, "runner")
+    assert sensor.native_value == "ended"
+    attrs = sensor.extra_state_attributes
+    assert attrs["distance_km"] == 5.432
+    assert attrs["duration_min"] == 30.0
+    assert attrs["heart_rate_bpm"] == 142
     assert "page_status" not in attrs
     assert "api_status" not in attrs
     assert "trackpoints_source" not in attrs

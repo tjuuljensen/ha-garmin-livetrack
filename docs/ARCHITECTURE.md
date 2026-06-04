@@ -90,9 +90,9 @@ Stored data includes:
 - recoverable active-session summaries
 - token for restart recovery only
 - known user policies
-- retained ended-session summary state as needed for recovery behavior
+- retained ended-session summary state for status-sensor presentation after restart
 
-The Garmin token remains in storage only and is redacted elsewhere.
+Recoverable active sessions store the token as a separate field. Retained ended-session summaries store the canonical URL so restored status sensors can keep exposing the full URL during the retention window.
 
 ## Session Lifecycle
 ### Main states
@@ -121,7 +121,7 @@ The integration can finalize a session from:
 The user-facing terminal state remains `ended`. Differentiation is carried through `end_reason`.
 
 ### Retention
-Per-user status sensors continue to present the latest ended-session data during the configured retention window. This keeps dashboards informative after a LiveTrack stops.
+Per-user status sensors continue to present the latest ended-session data during the configured retention window. The retained summary is persisted and restored across Home Assistant restarts, so dashboards remain informative after a LiveTrack stops and after HA reboots.
 
 ## User Policy Model
 ### Global defaults

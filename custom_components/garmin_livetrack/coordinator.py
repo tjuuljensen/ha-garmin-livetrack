@@ -479,6 +479,123 @@ class GarminLiveTrackManager:
             self.client.user_agent = self._effective_user_agent()
 
     @staticmethod
+    def _serialize_point(point: LiveTrackPoint | None) -> dict | None:
+        if point is None:
+            return None
+        return {
+            "timestamp": point.timestamp.isoformat() if point.timestamp else None,
+            "latitude": point.latitude,
+            "longitude": point.longitude,
+            "altitude_m": point.altitude_m,
+            "speed_mps": point.speed_mps,
+            "distance_m": point.distance_m,
+            "duration_s": point.duration_s,
+            "heart_rate_bpm": point.heart_rate_bpm,
+            "power_w": point.power_w,
+            "event_types": point.event_types,
+        }
+
+    @staticmethod
+    def _deserialize_point(value: dict | None) -> LiveTrackPoint | None:
+        if not isinstance(value, dict):
+            return None
+        return LiveTrackPoint(
+            timestamp=parse_garmin_datetime(value.get("timestamp")),
+            latitude=value.get("latitude"),
+            longitude=value.get("longitude"),
+            altitude_m=value.get("altitude_m"),
+            speed_mps=value.get("speed_mps"),
+            distance_m=value.get("distance_m"),
+            duration_s=value.get("duration_s"),
+            heart_rate_bpm=value.get("heart_rate_bpm"),
+            power_w=value.get("power_w"),
+            event_types=list(value.get("event_types") or []),
+            raw={},
+        )
+
+    def _serialize_session(self, session: LiveTrackSession, *, include_token: bool) -> dict:
+        row = {
+            "session_id": self._session_key(session.identity.session_id),
+            "redacted_url": session.identity.redacted_url,
+            "source": session.identity.source.value,
+            "first_seen": session.first_seen.isoformat(),
+            "garmin_user": session.garmin_user,
+            "activity_type": session.activity_type,
+            "start": session.start.isoformat() if session.start else None,
+            "expected_end": session.expected_end.isoformat() if session.expected_end else None,
+            "actual_end": session.actual_end.isoformat() if session.actual_end else None,
+            "last_fetch": session.last_fetch.isoformat() if session.last_fetch else None,
+            "last_success": session.last_success.isoformat() if session.last_success else None,
+            "last_point": self._serialize_point(session.last_point),
+            "trackpoint_count": session.trackpoint_count,
+            "status": self._persistable_status(session.status).value,
+            "rejected_reason": session.rejected_reason,
+            "end_reason": session.end_reason,
+            "notification_started_sent": session.notification_started_sent,
+            "notification_ended_sent": session.notification_ended_sent,
+        }
+        if include_token:
+            row["token"] = session.identity.token
+        else:
+            row["canonical_url"] = session.identity.canonical_url
+        return row
+
+    def _restore_ended_session(self, row: dict) -> LiveTrackSession | None:
+        sid = self._session_key(row.get("session_id", ""))
+        if not sid:
+            return None
+        source_value = row.get("source", LiveTrackSource.RECOVERY.value)
+        try:
+            source = LiveTrackSource(source_value)
+        except ValueError:
+            source = LiveTrackSource.RECOVERY
+        canonical_url = row.get("canonical_url") or ""
+        identity = LiveTrackIdentity(
+            session_id=sid,
+            token="",
+            canonical_url=canonical_url,
+            redacted_url=row.get("redacted_url", ""),
+            source=source,
+        )
+        status_value = row.get("status", LiveTrackStatus.ENDED.value)
+        try:
+            status = LiveTrackStatus(status_value)
+        except ValueError:
+            status = LiveTrackStatus.ENDED
+        if status in ACTIVE_STATES:
+            status = LiveTrackStatus.ENDED
+        return LiveTrackSession(
+            identity=identity,
+            garmin_user=row.get("garmin_user"),
+            activity_type=row.get("activity_type"),
+            start=parse_garmin_datetime(row.get("start")),
+            expected_end=parse_garmin_datetime(row.get("expected_end")),
+            actual_end=parse_garmin_datetime(row.get("actual_end")),
+            first_seen=parse_garmin_datetime(row.get("first_seen")) or datetime.now(UTC),
+            last_fetch=parse_garmin_datetime(row.get("last_fetch")),
+            last_success=parse_garmin_datetime(row.get("last_success")),
+            last_point=self._deserialize_point(row.get("last_point")),
+            trackpoint_count=int(row.get("trackpoint_count") or 0),
+            status=status,
+            rejected_reason=row.get("rejected_reason"),
+            end_reason=row.get("end_reason"),
+            notification_started_sent=row.get("notification_started_sent", False),
+            notification_ended_sent=row.get("notification_ended_sent", False),
+        )
+
+    def _prune_expired_ended_sessions(self, now: datetime | None = None) -> int:
+        now = now or datetime.now(UTC)
+        retain = timedelta(hours=int(self.options.get("retain_ended_hours", 24)))
+        expired: list[str] = []
+        for sid, session in self.ended_sessions.items():
+            reference = session.actual_end or session.last_success or session.last_fetch or session.first_seen
+            if reference and now - reference > retain:
+                expired.append(sid)
+        for sid in expired:
+            self.ended_sessions.pop(sid, None)
+        return len(expired)
+
+    @staticmethod
     def _storage_payload(value: dict | None) -> dict:
         if not isinstance(value, dict):
             return {}
@@ -666,6 +783,12 @@ class GarminLiveTrackManager:
                     session.status.value,
                 )
                 restored += 1
+            for row in data.get("ended_sessions", []):
+                session = self._restore_ended_session(row)
+                if session is None:
+                    continue
+                self.ended_sessions[session.identity.session_id] = session
+            self._prune_expired_ended_sessions()
         if restored:
             self._notify_listeners()
         return restored
@@ -688,26 +811,18 @@ class GarminLiveTrackManager:
             if sid in seen:
                 continue
             seen.add(sid)
-            active_sessions.append(
-                {
-                    "session_id": sid,
-                    "token": c.session.identity.token,
-                    "redacted_url": c.session.identity.redacted_url,
-                    "source": c.session.identity.source.value,
-                    "first_seen": c.session.first_seen.isoformat(),
-                    "garmin_user": c.session.garmin_user,
-                    "activity_type": c.session.activity_type,
-                    "start": c.session.start.isoformat() if c.session.start else None,
-                    "expected_end": c.session.expected_end.isoformat() if c.session.expected_end else None,
-                    "status": self._persistable_status(c.session.status).value,
-                    "notification_started_sent": c.session.notification_started_sent,
-                    "notification_ended_sent": c.session.notification_ended_sent,
-                }
-            )
+            active_sessions.append(self._serialize_session(c.session, include_token=True))
+
+        self._prune_expired_ended_sessions()
+        ended_sessions = [
+            self._serialize_session(session, include_token=False)
+            for session in self.ended_sessions.values()
+        ]
 
         await self.store.async_save(
             {
                 "active_sessions": active_sessions,
+                "ended_sessions": ended_sessions,
                 "known_users": {
                     name: {
                         "name": p.name,
