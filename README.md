@@ -1,31 +1,32 @@
-﻿# Garmin LiveTrack
+# Garmin LiveTrack
 
-Home Assistant custom integration for monitoring Garmin LiveTrack sessions without relying on template sensors, REST sensors, command_line sensors, or helper-based state machines.
+Home Assistant custom integration for Garmin LiveTrack session monitoring.
 
-The integration accepts Garmin LiveTrack URLs from Home Assistant services and IMAP events, tracks one or more active sessions independently, restores recoverable sessions after restart, exposes per-user devices and global health entities, and keeps LiveTrack tokens out of normal entity state, logs, and diagnostics.
+The integration accepts Garmin LiveTrack URLs from Home Assistant services and IMAP events, tracks one or more sessions independently, restores recoverable sessions after restart, exposes stable user devices and global health entities, and keeps Garmin tokens out of normal logs, diagnostics, and non-storage state.
 
 ## Status
-Current integration version: `0.1.1`
+Current version: `0.1.1`
 
-This project is functional but still under active development. Core functionality is working:
+Implemented:
 - UI setup through Home Assistant config entries
-- Manual `add_url` ingestion
+- manual URL ingestion
 - IMAP event ingestion
-- multiple concurrent sessions
+- independent concurrent session tracking
 - per-user stable entities and device trackers
 - restart recovery
 - start/end notifications
+- configurable notification message templates
+- configurable HTTP User-Agent
 - diagnostics with redaction
+- repair signal for suspected Garmin response-shape changes
 
-Remaining work is mostly around tests, lifecycle hardening for no-END edge cases, and pre-production cleanup of temporary debug attributes.
-Recent changes include:
-- per-user ended-session retention on the status sensor
-- aggregate active-session attributes on `binary_sensor.garmin_livetrack_any_active`
-- explicit inactive-without-END lifecycle handling
-- customizable start/end notification message templates
+Remaining work is mainly:
+- test coverage expansion
+- a few remaining lifecycle edge cases
+- entity-registry cleanup/migration polish
 
 ## Important Warning
-Garmin LiveTrack is not a documented public API. Garmin has changed the public site and response shape multiple times over the years. This integration is intentionally defensive, but future Garmin changes can still break session parsing or trackpoint extraction.
+Garmin LiveTrack is not a documented public API. Garmin can change the public page structure, hydration payloads, or API response shape without notice. This integration is built defensively, but Garmin-side changes can still affect session parsing or trackpoint extraction.
 
 ## Installation
 ### HACS custom repository
@@ -36,17 +37,17 @@ Garmin LiveTrack is not a documented public API. Garmin has changed the public s
 5. Add the integration from `Settings -> Devices & Services`.
 
 ### Manual installation
-1. Copy `custom_components/garmin_livetrack` into your Home Assistant `/config/custom_components/` directory.
+1. Copy `custom_components/garmin_livetrack` into `/config/custom_components/`.
 2. Restart Home Assistant.
 3. Add the integration from `Settings -> Devices & Services`.
 
 ## External Setup
-### Garmin side
-- Configure your Garmin device/app to send LiveTrack emails.
+### Garmin
+- Configure the Garmin device/app to send LiveTrack emails if you want email-driven ingestion.
 - Confirm that a normal LiveTrack URL opens in a browser.
 
-### IMAP side
-If you want automatic email-driven ingestion, configure the Home Assistant IMAP integration to fire an `imap_content` event. A practical extraction template looks like this:
+### IMAP
+If you want automatic ingestion from email, configure the Home Assistant IMAP integration to fire an `imap_content` event. A practical extraction template is:
 
 ```jinja
 {{ (text | regex_findall(find='https://livetrack\.garmin\.com/session/[^"'>\s]+', ignorecase=True) | first | default('')) | regex_replace(find='=\r?\n', replace='') }}
@@ -56,16 +57,16 @@ The integration listens only for `imap_content` and only extracts Garmin LiveTra
 
 ## Quick Start
 1. Add the integration.
-2. Open `Configure` and set your global defaults.
+2. Open `Configure` and set the global defaults.
 3. Call `garmin_livetrack.add_url` with a current Garmin LiveTrack URL.
 4. Confirm that:
    - `binary_sensor.garmin_livetrack_any_active` turns on
-   - the relevant Garmin user device appears
-   - the user status sensor transitions into `active`
+   - the Garmin user device appears
+   - the user status sensor reaches `active`
    - the user device tracker receives coordinates
-5. If using IMAP, send or wait for a Garmin LiveTrack email and confirm the URL is consumed automatically.
+5. If using IMAP, verify that a Garmin email results in automatic URL ingestion.
 
-## Configuration Model
+## Configuration
 The integration uses one config entry with:
 - global settings
 - known user registry
@@ -91,19 +92,25 @@ The integration uses one config entry with:
 - `Finalization window (minutes)`
 - `Retain ended sessions (hours)`
 - `Startup poll defer (seconds)`
+- `Expose debug attributes`
 
-### User policy options
+### Per-user policy options
 Each known user can have overrides for:
 - tracking enabled/disabled
-- handling mode (`normal`, `register_only`, `one_event_only`)
+- handling mode: `normal`, `register_only`, `one_event_only`
 - notification enable mode
 - notification target override
 - iOS-style payload mode
-- activity filter mode (`inherit_global` or `custom`)
+- activity filter mode: `inherit_global` or `custom`
 - allowed activities when using custom mode
 
-### Notification message templates
-Global notification messages are now configurable from the integration options UI.
+### User matching
+User policy matching is case-insensitive internally, while the original Garmin display name is preserved for display and diagnostics.
+
+Garmin identity is based on Garmin `userDisplayName`. It is a user-facing string and not a guaranteed immutable account identifier.
+
+## Notification Templates
+Start and end notification text is configurable from the options UI.
 
 Default templates:
 - start: `LiveTrack started: {user} ({activity})`
@@ -121,33 +128,29 @@ Supported placeholders:
 - `duration_min`
 
 Example templates:
-- Start: {user} started {activity}
-- End: {user} finished {activity} after {duration_min} min ({distance_km} km) - {reason}
+- `Start: {user} started {activity}`
+- `End: {user} finished {activity} after {duration_min} min ({distance_km} km) - {reason}`
 
-If a template is invalid, the integration falls back to the built-in default and logs a warning instead of breaking notifications.
+If a template is invalid, the integration falls back to the built-in default and logs a warning.
 
-### Custom HTTP User-Agent
-The integration now lets you override the HTTP User-Agent used for Garmin page and API requests.
+## Custom HTTP User-Agent
+The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
 - `HomeAssistant-GarminLiveTrack/0.1.1`
 
-Why you might change it:
-- Garmin behavior appears to differ for different clients
-- you want troubleshooting parity with a browser session
-- you want a stable custom identifier while testing Garmin changes
-
-Why you usually should not change it:
-- the default is the least surprising integration behavior
-- random browser spoofing makes troubleshooting harder
-- a misleading User-Agent can hide real parsing/protocol problems
+Typical reasons to change it:
+- Garmin behaves differently for different clients
+- you want to compare integration behavior against a browser session
+- you want a stable custom identifier during troubleshooting
 
 Recommended approach:
 1. Start with the default.
-2. Only change it when testing a concrete Garmin behavior difference.
-3. Record the chosen value in your issue notes or diagnostics snapshot.
+2. Change it only when testing a concrete Garmin behavior difference.
+3. Record the chosen value in diagnostics or issue notes when troubleshooting.
+4. Clear the field and save if you want to revert to the built-in default.
 
-Common examples you can test:
+Common examples:
 - integration default:
   - `HomeAssistant-GarminLiveTrack/0.1.1`
 - Windows Chrome:
@@ -159,35 +162,31 @@ Common examples you can test:
 - Android Chrome:
   - `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36`
 
-Validation notes:
-- the integration only accepts non-empty values up to 256 characters
-- the effective User-Agent is exposed in diagnostics because it is not sensitive
-
-### User matching
-User policy matching is case-insensitive internally, but the original Garmin display name is preserved for display.
-
-Garmin user identity currently relies on Garmin `userDisplayName`. That is practical, but not perfect: Garmin display names are user-facing strings, not guaranteed immutable IDs.
+Validation:
+- empty value resets to the built-in default
+- maximum 256 characters
+- effective value is shown in diagnostics
 
 ## Services
 ### `garmin_livetrack.add_url`
 Add a Garmin LiveTrack URL manually.
 
 Fields:
-- `url` (required)
+- `url` required
 
 ### `garmin_livetrack.stop_session`
 Stop one active session.
 
 Fields:
-- `session_id` (optional)
-- `session_id_hash` (optional)
+- `session_id` optional
+- `session_id_hash` optional
 
 ### `garmin_livetrack.refresh_session`
 Force one active session to refresh immediately.
 
 Fields:
-- `session_id` (optional)
-- `session_id_hash` (optional)
+- `session_id` optional
+- `session_id_hash` optional
 
 ### `garmin_livetrack.refresh_all`
 Force all active sessions to refresh immediately.
@@ -201,12 +200,10 @@ Reload stored user policies.
 ### `garmin_livetrack.test_notification`
 Send a test notification using the current global notification settings.
 
-Note:
-- this service only validates the current notify target and delivery path
-- it does not render a full live session template context
+This validates notify routing and delivery path. It does not render a full live-session notification context.
 
 ### `garmin_livetrack.set_user_policy`
-Service-based user policy management.
+Update user tracking policy, notification routing, and activity overrides.
 
 Fields:
 - `user`
@@ -224,7 +221,7 @@ Remove a known user policy.
 Return known users plus stored and effective policy information.
 
 ### `garmin_livetrack.cleanup_legacy_entities`
-Remove orphaned legacy Garmin LiveTrack entities after migration from older per-session entity shapes.
+Remove orphaned legacy Garmin LiveTrack entities that are no longer provided by the integration.
 
 ## Entities
 ### Global entities
@@ -233,7 +230,13 @@ These are attached to one integration-level Garmin LiveTrack device:
 - `sensor.garmin_livetrack_active_count`
 - `sensor.garmin_livetrack_last_error`
 
-`sensor.garmin_livetrack_session_count` has been deprecated and is no longer provided.
+`sensor.garmin_livetrack_session_count` is no longer provided.
+
+`binary_sensor.garmin_livetrack_any_active` also exposes aggregate attributes:
+- `active_count`
+- `active_users`
+- `active_activities`
+- `active_summaries`
 
 ### Per-user entities
 Each known Garmin user gets a stable Home Assistant device with:
@@ -241,85 +244,80 @@ Each known Garmin user gets a stable Home Assistant device with:
 - active binary sensor
 - device tracker
 
-The per-user status sensor now retains the last ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops.
-
-The entity model is intentionally per-user, not per-session, so a new LiveTrack session updates the same user entities instead of creating endless new entity families.
+The per-user status sensor retains the most recent ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops.
 
 ### Session fallback device
-If a session is active before Garmin returns a user display name, the integration can temporarily use a session-based fallback device until the user identity is known.
+If a session becomes active before Garmin returns a user display name, the integration can use a temporary session-based fallback device until a user identity is known.
 
-## Architecture Overview
+## Runtime Overview
 ### Ingestion
-The integration accepts LiveTrack URLs from:
+LiveTrack URLs can come from:
 - `garmin_livetrack.add_url`
 - `imap_content` events
-- storage-based restart recovery
+- restart recovery from storage
 
 ### Runtime manager
 `GarminLiveTrackManager` owns:
 - active coordinators
 - retained ended sessions
-- known users and policy state
+- user policy state
 - IMAP event listener
 - service registration
 - storage load/save
 - notification dispatch
+- shape-change repair signal
 
 ### Session coordinators
-Each active LiveTrack session runs independently through its own coordinator/task. That avoids the shared-state problems from the old YAML package:
-- no shared active URL helper
-- no shared data sensor
-- no fixed slots
-- no token leakage through template/history state
+Each active session runs independently through its own coordinator/task.
 
 ### Storage and recovery
-Active or recoverable sessions are stored in Home Assistant storage with the token kept only there for restart recovery. On startup:
-1. storage is loaded
-2. recoverable sessions are reconstructed
-3. restored pollers start after a configurable defer window
-4. each restored session fetches independently
+Active or recoverable sessions are stored in Home Assistant storage with the token kept only there for restart recovery.
+
+Startup flow:
+1. load storage
+2. rebuild recoverable sessions
+3. defer restored polling by the configured startup delay
+4. start restored session pollers independently
 
 ### Notification flow
-Notifications are resolved in this order:
+Notification routing is resolved in this order:
 1. user override
 2. global default
 
-The same pattern applies to activity filtering and iOS-style notification payload handling.
+Notification text is rendered from the global start/end templates.
 
-Message body rendering uses the global notification templates from the options flow. Per-user routing still determines whether notifications are sent and which `notify` service receives them.
-
-## Garmin Fetch / Parsing Resiliency
-### Why the integration does page-first plus API fetch
-The client does not assume Garmin’s API endpoint alone is sufficient. Instead it:
+## Garmin Fetch and Parsing
+### Request flow
+The client:
 1. fetches the public LiveTrack page first
 2. captures cookies and possible CSRF token
-3. calls the API endpoint with the same session context
-4. falls back to page hydration data when API trackpoints are missing
+3. calls the Garmin session API
+4. falls back to hydration data if API trackpoints are missing
 
-This is more resilient than fixed-path scraping because Garmin has changed where trackpoints appear more than once.
+### Trackpoint extraction
+The client walks likely structures and selects the best candidate based on session-like and trackpoint-like content.
 
-### Trackpoint extraction strategy
-The client does not assume one exact JSON path. It walks likely branches and selects the best candidate based on session-like structures and trackpoint-like arrays. Sources include:
+Sources include:
 - API `trackPoints`
 - API `trackpoints`
 - API `points`
 - Next.js `__NEXT_DATA__`
-- app-router / hydration payloads
+- app-router or hydration payloads
 - nested arrays containing Garmin point-like dicts
 
-This approach exists because a fixed-path implementation is brittle and was one of the reasons the old YAML-based stack was hard to keep working.
-
-### Service-change detection
-The integration already keeps heuristic shape-change counters when repeated fetches return anomalies such as:
+### Shape-change signal
+The integration watches for repeated anomalies such as:
 - missing session
 - missing trackpoints
 - malformed response branches
 
-The next phase is to promote this from a heuristic flag into repair issues and clearer diagnostics guidance.
+When the signal crosses the suspicion threshold, the integration:
+- raises a Home Assistant repair issue
+- exposes `shape_change_suspected` and `shape_change_count` on `sensor.garmin_livetrack_last_error`
+- includes the same signal in diagnostics
 
 ## Session Lifecycle
-### Normal transitions
-Typical flow:
+### Typical states
 - `discovered`
 - `fetching`
 - `waiting_for_trackpoint`
@@ -335,46 +333,44 @@ Other terminal/problem states include:
 - `rejected_user`
 - `rejected_activity`
 
-### Finalization window
-`finalization_minutes` keeps a just-ended session alive briefly when the end is inferred rather than explicit, so the integration can pick up final points. Historical/manual ended sessions are finalized directly rather than sitting in `ending` unnecessarily.
+### Finalization
+`finalization_minutes` keeps a just-ended session alive briefly when the end is inferred so the integration can capture late final data.
 
-If Garmin keeps responding but a session stops making progress without emitting `END`, the integration now treats that as an inferred ending:
-- it enters `ending`
-- uses end reason `inactive_no_end`
+If Garmin continues responding but the session stops making progress without emitting `END`, the integration:
+- enters `ending`
+- records end reason `inactive_no_end`
 - waits through `finalization_minutes`
-- then finalizes as `ended`
+- finalizes as `ended`
 
-### Stale detection
+### Stale handling
 Current stale handling includes:
 - no-progress detection based on trackpoint count/timestamp
 - timeout when a session never produces points after the initial wait window
 - stale finalization when fetches fail beyond the stale threshold
 
-The main remaining lifecycle work is expanding test coverage and diagnostics around these inferred-ending paths rather than inventing more new states.
-
-## Configuration Tuning
+## Tuning
 ### `update_interval_seconds`
-Default is 60 seconds. That is intentionally conservative and roughly aligned with reasonable browser-like polling behavior. Going lower increases load on Garmin and increases the chance of noisy transient states.
+Default is 60 seconds. That is intentionally conservative and roughly aligned with reasonable browser-like polling behavior.
 
-Recommended guidance:
+Guidance:
 - `60` for conservative/default use
-- `30` if you want more responsiveness and accept more polling
+- `30` for higher responsiveness if you accept more polling
 - avoid lower values unless you have a concrete reason
 
 ### `initial_trackpoint_wait_minutes`
-Use this when Garmin has created the session but has not exposed trackpoints yet.
+Controls how long the integration waits when Garmin has created the session but has not exposed trackpoints yet.
 
 ### `stale_minutes`
 Controls how long the integration tolerates no useful progress before marking a session stale.
 
 ### `finalization_minutes`
-Controls how long inferred-ending sessions stay alive to capture late final data.
+Controls how long inferred-ending sessions remain active to capture late final data.
 
 ### `defer_startup_poll_seconds`
-Delays restored pollers at startup to reduce Home Assistant startup pressure.
+Delays restored pollers at startup to reduce startup pressure.
 
 ### `Expose debug attributes`
-When disabled, the integration keeps troubleshooting-only attributes off the normal session status sensor surface.
+When disabled, troubleshooting-only attributes stay off the normal status-sensor surface.
 
 When enabled, the status sensor also exposes:
 - `page_status`
@@ -382,32 +378,29 @@ When enabled, the status sensor also exposes:
 - `trackpoints_source`
 - `poll_task_alive`
 
-### `HTTP User-Agent`
-This controls the User-Agent sent to Garmin for both the public LiveTrack page fetch and the session API request.
-
-Recommended guidance:
-- keep the default unless you are testing a specific Garmin behavior difference
-- if you switch to a browser-like value, keep it stable during the entire test period
-- if you find a Garmin regression, capture the exact User-Agent used
-
-## Privacy And Security
+## Privacy and Security
 ### Sensitive data
 Garmin LiveTrack URLs contain a token. The integration treats that token as sensitive.
 
 Rules:
-- do not store raw token in entity state
+- do not store raw token in normal entity state
 - do not log raw token
 - do not expose raw token in diagnostics
 - do not include raw token in notifications
 - persist token only in Home Assistant storage for restart recovery
 
 ### Coordinates
-Coordinates are intentionally exposed through the device tracker because that is core functionality. They are not duplicated into diagnostics.
+Coordinates are intentionally exposed through the device tracker because location tracking is a core function of the integration. They are not duplicated into diagnostics.
 
 ### URL exposure
-Current status entities expose the full LiveTrack URL because that has been useful for inline display and validation during development. This is a deliberate tradeoff and remains a pre-production cleanup decision.
+Status entities intentionally expose the full LiveTrack URL. This is a product choice to support inline display, validation, and troubleshooting workflows.
 
-## Migration From The Old YAML Package
+This means:
+- the full URL is available in normal entity attributes
+- the token remains sensitive in logs and diagnostics, but not in the status-entity URL field
+- dashboard exposure of the URL is an explicit trust decision by the operator
+
+## Migration
 1. Disable the old Garmin LiveTrack YAML package.
 2. Remove or recorder-exclude old helper entities if they still exist.
 3. Restart Home Assistant.
@@ -418,23 +411,26 @@ Current status entities expose the full LiveTrack URL because that has been usef
 
 ## Troubleshooting
 ### `Config flow could not be loaded`
-A restart is usually required after updating the custom integration. The integration has already seen compatibility issues around Home Assistant options-flow API changes, so always deploy the full updated custom component before retesting.
+Restart Home Assistant after updating the custom integration. Ensure the full updated custom component is deployed before retrying.
 
 ### Session stuck in `waiting_for_trackpoint`
-Use `refresh_session` or `refresh_all` to force a poll and, if needed, temporarily enable `Expose debug attributes` to inspect:
+Use `refresh_session` or `refresh_all` and, if needed, enable `Expose debug attributes` to inspect:
 - `page_status`
 - `api_status`
 - `trackpoints_source`
 - `poll_task_alive`
 
 ### Restart recovery is slow
-Check `defer_startup_poll_seconds` and startup diagnostic logs. Recovery was intentionally deferred to avoid blocking Home Assistant startup.
+Check:
+- `defer_startup_poll_seconds`
+- diagnostics
+- debug logs for startup timing breadcrumbs
 
-### IMAP not creating sessions
+### IMAP is not creating sessions
 Confirm:
 - `Listen for IMAP events` is enabled
-- IMAP integration is actually firing `imap_content`
-- the event content contains a Garmin URL
+- the IMAP integration is firing `imap_content`
+- the event body contains a Garmin URL
 - quoted-printable soft line breaks are removed
 
 ### Invalid URL
@@ -442,19 +438,29 @@ Only Garmin LiveTrack URLs hosted on `livetrack.garmin.com` are accepted.
 
 ### Missing session or missing trackpoints
 This can mean:
-- Garmin has changed response shape
-- the session is no longer public/available
+- Garmin changed response shape
+- the session is no longer public or available
 - Garmin returned a transient incomplete payload
 
-Inspect diagnostics and the status sensor debug attributes before assuming the session is gone.
+Check:
+- diagnostics
+- status sensor debug attributes if enabled
+- configured `HTTP User-Agent`
+- browser behavior with the same LiveTrack
 
-If you are comparing behavior against a browser, also verify the configured `HTTP User-Agent` in diagnostics before drawing conclusions.
+If the problem repeats, Home Assistant should also raise a Garmin LiveTrack repair issue indicating that the Garmin response shape may have changed.
 
 ## Local Testing
-Run tests locally in a Python 3.12 virtual environment that matches CI expectations:
+Run the full repo pytest suite in a Python 3.12 environment aligned with CI:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1
+```
+
+Linux/macOS:
+
+```bash
+bash ./scripts/test-local.sh
 ```
 
 Useful options:
@@ -462,9 +468,15 @@ Useful options:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -RecreateVenv
 powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -SkipInstall
+powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -PythonCommand "python3.12"
 ```
 
-## Additional Repo Documentation
-For a deeper implementation snapshot and forward plan, see:
-- [docs/architecture-implementation-plan.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\architecture-implementation-plan.md)
+```bash
+bash ./scripts/test-local.sh --recreate-venv
+bash ./scripts/test-local.sh --skip-install
+bash ./scripts/test-local.sh --python python3.12
+```
+
+## Additional Documentation
 - [TODO.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\TODO.md)
+- [docs/architecture-implementation-plan.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\architecture-implementation-plan.md)

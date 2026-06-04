@@ -251,7 +251,9 @@ def _normalize(inp: dict, *, include_users: bool) -> dict:
         raise vol.Invalid("notify_service must look like notify.<target>")
     out[CONF_NOTIFY_SERVICE] = notify_service
     user_agent = str(out.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or "").strip()
-    if not user_agent or len(user_agent) > 256:
+    if not user_agent:
+        user_agent = DEFAULT_USER_AGENT
+    if len(user_agent) > 256:
         raise vol.Invalid(ERROR_INVALID_USER_AGENT)
     out[CONF_USER_AGENT] = user_agent
     out[CONF_NOTIFICATION_START_TEMPLATE] = str(

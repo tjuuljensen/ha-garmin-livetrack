@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 
 import pytest
 
@@ -57,6 +58,7 @@ class _FakeHass:
         self.states = type("States", (), {"async_entity_ids": lambda self: []})()
         self.data = {}
         self.is_running = True
+        self.config = type("Config", (), {"config_dir": tempfile.gettempdir()})()
 
     def async_create_task(self, coro):
         return self.loop.create_task(coro)

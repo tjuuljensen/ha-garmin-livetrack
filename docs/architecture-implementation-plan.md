@@ -1,227 +1,248 @@
-﻿# Garmin LiveTrack Architecture And Implementation Plan
+# Garmin LiveTrack Architecture And Implementation Plan
 
 ## Purpose
-This document captures the current architecture, the migration context from the older YAML package, and the remaining phased work needed to take the `garmin_livetrack` integration from functional development state to a production-ready HACS integration.
+This document describes the current architecture, operational model, and remaining implementation work for the `garmin_livetrack` integration.
 
-It consolidates information from the previous handoff and resume documents together with the work completed since then.
+It is the maintainers' technical snapshot. The README is the operator-facing document. `TODO.md` is the active backlog.
 
-## Historical Context
-The original Home Assistant Garmin LiveTrack setup was implemented as a YAML package using helpers, template sensors, and shared REST-like state. It worked, but had structural weaknesses:
-- shared active URL state
-- shared data sensor
-- token exposure risks through state/history
-- fixed-slot assumptions that broke parallel sessions
-- difficult restart recovery
-- brittle template chains
-
-The custom integration was created specifically to replace that architecture with a Python-managed runtime state machine.
-
-## Current Architecture
-### One integration entry, many user devices
-The current design is intentionally single-instance at the config-entry level:
-- one Garmin LiveTrack integration entry
-- one global/integration device for aggregate sensors
-- one stable device per Garmin display name/user policy
-- optional fallback device for anonymous session startup before Garmin returns a user name
-
-This model is preferred over multiple config entries because the integration is conceptually one ingestion/runtime manager with many users and many sessions.
-
-### Core runtime components
-#### `client.py`
-Responsible for:
-- URL parsing and canonicalization
-- Garmin page-first fetch
-- CSRF extraction
-- API fetch
-- hydration fallback parsing
-- normalized session/trackpoint extraction
-- redacted error handling
-
-#### `coordinator.py`
-Responsible for:
-- `GarminLiveTrackManager`
-- per-session poller/coordinator lifecycle
-- known user policies
-- storage and restart recovery
-- IMAP listener registration
-- service registration
-- notifications
-- aggregate runtime state
-
-#### Entity platforms
-- `sensor.py`: global sensors + per-user status sensors
-- `binary_sensor.py`: global active sensor + per-user active sensors
-- `device_tracker.py`: per-user GPS trackers
-
-#### `config_flow.py`
-Responsible for:
-- first-time integration setup
-- global options editing
-- per-user policy editing through a second-step options flow
-
-### Storage model
-Persistent state is held in Home Assistant storage, not helper entities. Storage currently includes:
-- active/recoverable session summaries
-- token for recovery only
-- known user policies
-
-Tokens remain in storage only and are redacted elsewhere.
-
-## Key Design Decisions Already Implemented
-### 1. Independent polling per session
-Each LiveTrack session owns its own runtime coordinator/task. This removed the old shared-state problem and allows multiple simultaneous sessions to run without overwriting one another.
-
-### 2. Per-user stable entity model
-Entities are intentionally stable per user, not per session. A new session for the same user updates the same user-facing status sensor, active binary sensor, and tracker.
-
-### 3. Case-insensitive internal user matching
-Garmin display names are matched case-insensitively internally while preserving the original display text for display and diagnostics.
-
-### 4. Integration-level device for global sensors
-Aggregate sensors now appear under a single Garmin LiveTrack integration device instead of floating independently.
-
-### 5. Deferred restart recovery
-Recovered sessions are reconstructed from storage first and their pollers are started later, using a configurable startup defer. This was added to reduce startup stalls and avoid immediate polling inside config entry setup.
-
-### 6. Conservative token handling
-The integration keeps the token out of normal entity state, logs, and diagnostics. The token is retained only in storage for restart recovery.
-
-### 7. Customizable notification message templates
-Start/end notification routing still follows user override -> global default, but the message bodies themselves are now configurable global templates in the options flow. This keeps runtime notification logic simple while removing hard-coded user-facing message strings from Python.
-
-## Recovery And Startup Lessons Learned
-The earlier rollout uncovered two important startup issues:
-1. cross-thread `hass.async_create_task` scheduling in startup/recovery callbacks
-2. restored pollers being started too early during storage restore
-
-Both were fixed. Startup diagnostics were then added to make recovery timing visible. These diagnostics are still present and should be reviewed before production release.
-
-## Current Functional Status
-### Working now
-- UI setup
-- options flow for global settings
-- options flow for one selected user policy
-- manual URL ingestion
-- IMAP event ingestion
-- duplicate session detection
+## Scope
+The integration provides:
+- Garmin LiveTrack URL ingestion from Home Assistant services and IMAP events
+- independent tracking of one or more sessions
+- stable per-user entities
 - restart recovery
-- aggregate active sensor set
-- per-user status/active/tracker devices
-- start/end notifications
-- service-driven user policy management
-- `list_users` action response
-- diagnostics redaction
-- cleanup service for orphaned legacy entities
-- customizable start/end notification messages
-- retained ended-session values on per-user status sensors
-- aggregate active-session summaries on the global active binary sensor
+- notification routing and message rendering
+- diagnostics and repair signaling
 
-### Working, but still needs stronger validation
-- strict user matrix behavior
-- one-event-only semantics under mixed IMAP/manual timing
-- stale/no-END handling for discarded activities
-- Garmin shape-change detection and repair surfacing
-- options-flow UX edge cases
-- notification-template validation and formatting fallbacks
+## Architectural Model
+### One integration entry
+The integration is designed as one Home Assistant config entry that manages:
+- one global/integration device
+- one stable device per Garmin display name/user policy
+- zero or more active runtime sessions
+- zero or more retained ended sessions
 
-## Policy Semantics
-### Global versus user-level defaults
-The intended model is:
-- global setting = default
-- user setting = override
+### Runtime ownership
+`GarminLiveTrackManager` owns:
+- active coordinators
+- retained ended sessions
+- user policy state
+- service registration
+- IMAP listener registration
+- storage load/save
+- notification routing
+- shape-change repair signaling
 
-This applies to:
-- activity filter
-- notification enablement
+### Session ownership
+Each active Garmin LiveTrack session has its own coordinator/task. Sessions do not share a poller or a shared mutable state object.
+
+### Entity ownership
+Entity ownership is split by purpose:
+- global health and aggregate entities live on one integration device
+- user-facing status/active/tracker entities live on user devices
+- temporary fallback session devices are used only when a user identity is not yet known
+
+## Runtime Components
+### `client.py`
+Responsibilities:
+- parse and canonicalize LiveTrack URLs
+- fetch Garmin page first
+- extract CSRF when present
+- call Garmin session API
+- fall back to hydration payloads
+- normalize session and trackpoint results
+- return structured redacted errors
+
+### `coordinator.py`
+Responsibilities:
+- manager lifecycle
+- per-session polling
+- startup recovery
+- user policy enforcement
+- notification routing
+- retained ended-session handling
+- repair-signal synchronization
+
+### Entity platforms
+- `sensor.py`
+  - global sensors
+  - per-user status sensors
+- `binary_sensor.py`
+  - global active sensor
+  - per-user active sensors
+- `device_tracker.py`
+  - per-user GPS trackers
+
+### `config_flow.py`
+Responsibilities:
+- initial setup
+- global options
+- per-user policy editing
+
+### `repairs.py`
+Responsibilities:
+- create and clear Home Assistant repair issues for repeated Garmin anomaly patterns
+
+## Storage Model
+Persistent state lives in Home Assistant storage, not helper entities.
+
+Stored data includes:
+- recoverable active-session summaries
+- token for restart recovery only
+- known user policies
+- retained ended-session summary state as needed for recovery behavior
+
+The Garmin token remains in storage only and is redacted elsewhere.
+
+## Session Lifecycle
+### Main states
+- `discovered`
+- `fetching`
+- `waiting_for_trackpoint`
+- `active`
+- `ending`
+- `ended`
+
+Other terminal or problem states:
+- `expired`
+- `stale`
+- `stopped`
+- `garmin_error`
+- `rejected_user`
+- `rejected_activity`
+
+### End inference
+The integration can finalize a session from:
+- explicit Garmin END event
+- Garmin end timestamp in the past
+- fetch-ok but inactive/no-progress behavior
+- manual stop
+
+The user-facing terminal state remains `ended`. Differentiation is carried through `end_reason`.
+
+### Retention
+Per-user status sensors continue to present the latest ended-session data during the configured retention window. This keeps dashboards informative after a LiveTrack stops.
+
+## User Policy Model
+### Global defaults
+Global settings define the default behavior for:
+- notifications
 - notify target
 - iOS-style notification payload
+- activity filter
 
-The current UI and reporting were adjusted to reflect this explicitly rather than implying a merge model.
+### Per-user overrides
+Per-user policy can override:
+- tracking enabled
+- handling mode
+- notification enablement
+- notify target
+- iOS-style payload behavior
+- activity filter
 
-### Notification templates versus notification policy
-Notification policy answers:
-- whether a user gets notifications
-- which `notify` service is used
-- whether iOS-style payload data is attached
+### Unknown-user handling
+Behavior depends on:
+- `strict_users`
+- `accept_first_seen_users`
 
-Notification templates answer:
-- what human-facing message text is sent for start/end events
+Supported paths:
+- register and track immediately
+- register only and reject tracking
+- allow one event and require later explicit enablement
 
-This separation is intentional. Per-user routing remains policy-driven, while message phrasing remains a single global integration concern for now.
+## Notifications
+### Routing
+Notification routing resolves in this order:
+1. per-user override
+2. global default
 
-### Unknown-user behavior
-Current logic supports:
-- `strict_users=false`: register and track immediately
-- `strict_users=true`, `accept_first_seen_users=false`: register-only, reject tracking
-- `strict_users=true`, `accept_first_seen_users=true`: accept one event, then disable until explicitly enabled
+### Message rendering
+Start and end notification text comes from configurable global templates.
 
-This is implemented, but still needs more direct tests and final docs wording.
+Supported placeholders include:
+- `user`
+- `activity`
+- `reason`
+- `source`
+- `url`
+- `redacted_url`
+- `session_id_hash`
+- `distance_km`
+- `duration_min`
+
+If a template is invalid, the integration falls back to the default message and logs a warning.
 
 ## Garmin Fetch Strategy
-### Why page-first exists
-The integration deliberately fetches the Garmin LiveTrack page first, then the API, instead of calling the API only. That is required because Garmin has historically moved data between:
-- API JSON
-- Next.js hydration payloads
-- app-router pushed payloads
-- session-like nested branches
+### Request pattern
+The request pattern is:
+1. fetch public LiveTrack page
+2. capture cookies and possible CSRF
+3. request Garmin session API
+4. inspect hydration payloads if necessary
 
-### Why candidate walking exists
-A fixed JSON path is brittle. The integration instead walks likely structures and chooses the best candidate by session-like and trackpoint-like patterns. This is the pragmatic response to Garmin’s unstable payload shapes.
+### Trackpoint extraction
+The parser searches for trackpoint-like content across likely data branches instead of depending on one fixed JSON path.
 
-## Known Risks / Open Questions
-### 1. No-END discarded activity cases
-Garmin can stop exposing progress without emitting a clean `END`. This remains one of the highest-value hardening areas.
+This includes:
+- API arrays such as `trackPoints`, `trackpoints`, or `points`
+- Next.js `__NEXT_DATA__`
+- hydration or app-router payloads
+- nested point-like arrays
 
-### 2. Display-name identity limitations
-The integration currently relies on Garmin `userDisplayName`. That is practical and works well enough for the current use case, but it is not a guaranteed stable immutable ID.
+## Diagnostics And Repairs
+### Diagnostics
+Diagnostics provide:
+- redacted configuration
+- active and ended session counts
+- user policy summaries
+- session summaries
+- effective User-Agent
+- shape-change signal state
 
-### 3. Full URL exposure on status entities
-This remains intentionally enabled today for validation/debugging and inline display use. It is a known privacy tradeoff that must be decided before production release.
+### Shape-change repair signal
+Repeated anomaly patterns such as:
+- missing session
+- missing trackpoints
+- malformed response branches
 
-### 4. Temporary debug attributes
-This is largely resolved:
-- `last_fetch` stays exposed
-- `page_status`, `api_status`, `trackpoints_source`, and `poll_task_alive` are gated behind an explicit debug option
+can raise a Home Assistant repair issue indicating that Garmin's public response shape may have changed.
 
-The remaining open question is whether that option should remain in the normal options UI for a production release or move behind a more explicit troubleshooting path.
+The same signal is also exposed through:
+- `sensor.garmin_livetrack_last_error` attributes
+- diagnostics
 
-### 5. Notification-template scope
-Notification message customization is currently global, not per-user and not locale-aware by HA frontend language. That is acceptable for now, but if multilingual defaults or per-user phrasing become important later, that should be a separate follow-up rather than being folded into the current policy model.
+## Logging And Debugging
+### Startup diagnostics
+Startup timing breadcrumbs remain available through runtime state and debug logs. They no longer emit warning-level noise during normal operation.
 
-## Recommended Next Phases
-### Phase A - Tests and policy confidence
-- add tests for user-policy inheritance/override behavior
-- add tests for case-insensitive user matching
-- add tests for strict/accept-first matrix
-- add tests for options-flow per-user edits
-- add tests for notification-template formatting and invalid-template fallback
+### Debug attributes
+`last_fetch` remains exposed by design.
 
-### Phase B - Lifecycle hardening
-- strengthen no-END stale handling for true discarded/no-data edge cases
-- keep the current inactive-but-fetch-ok finalize path stable and expand tests rather than inventing new states
-- keep `ended` as the user-facing terminal state and use `end_reason` for differentiation
+Additional troubleshooting attributes:
+- `page_status`
+- `api_status`
+- `trackpoints_source`
+- `poll_task_alive`
 
-### Phase C - Protocol and diagnostics polish
-- make User-Agent configurable
-- expose active User-Agent safely in diagnostics
-- convert Garmin shape-change heuristics into repair issues and clearer operator guidance
+are gated behind the normal `Expose debug attributes` option in the options UI.
 
-### Phase D - Pre-production cleanup
-- decide on full URL exposure policy
-- decide on debug attribute policy
-- add entity registry migration strategy if needed
-- tighten docs and tests for HACS submission readiness
+## Product Decisions
+The following decisions are currently intentional and closed:
+- full LiveTrack URLs remain exposed on status entities
+- `Expose debug attributes` remains in the normal options UI as an advanced troubleshooting toggle
 
-## Documentation Relationship
-- `README.md` is the operator-facing document.
-- `TODO.md` is the active backlog.
-- This file is the architectural snapshot and phased implementation plan.
+## Remaining Work
+### High-value remaining tests
+- options-flow tests for user-policy editing
+- per-user notification routing/fallback tests
+- additional no-END discarded-activity coverage
+- shape-change repair-signal transition tests
+- configurable User-Agent tests
 
-## Migration Notes From Prior Handoff
-The earlier handoff correctly emphasized:
-- avoiding mixed-mode testing with both YAML package and custom integration active
-- reducing startup log storms from unrelated template problems before blaming Garmin recovery
-- keeping token redaction strict
-- treating startup/recovery as a first-order quality issue
+### Cleanup and migration
+- evaluate whether a one-time entity-registry migration strategy is still needed
+- add cleanup/migration tests if that path remains relevant
 
-Those lessons remain relevant and should continue guiding validation.
+### Documentation
+- keep README and TODO aligned with runtime behavior
+- add focused migration guidance if entity-registry migration changes

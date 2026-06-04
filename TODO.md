@@ -1,109 +1,93 @@
-﻿# Coding Task List
+# Coding Task List
 
-## User-level Settings
-- [DONE] Add per-user notification settings:
-  - `enable_notifications`
-  - `notify_service`
-  - `ios_notification_style`
-- [DONE] Add per-user activity filter override using the global filter as the default when no user override exists.
-- [DONE] Persist per-user policy/settings in integration storage and expose management in Options UI.
-- [DONE] Add global notification message templates for start/end notifications.
-- [DONE] Define fallback precedence:
-  - user override -> global default
-  - unknown user behavior with `accept_first_seen_users`
-- [PENDING] Improve global `allowed_users` UX with autocomplete/suggestions from known Garmin display names while preserving free-text pre-registration.
-- [PENDING] Add explicit per-user remove-user/admin controls in the Options UI instead of service-only management.
-- [PENDING] Consider conditional display/hiding of user policy fields in the options flow to reduce ambiguity when a setting is inherited.
+## Core Behavior
+- [DONE] UI setup through Home Assistant config entries
+- [DONE] manual URL ingestion
+- [DONE] IMAP event ingestion
+- [DONE] independent concurrent session tracking
+- [DONE] duplicate detection
+- [DONE] restart recovery
+- [DONE] per-user stable entities
+- [DONE] integration-level global entities
+- [DONE] start/end notifications
+- [DONE] configurable notification templates
+- [DONE] configurable HTTP User-Agent
+- [DONE] diagnostics redaction
+- [DONE] repair signal for suspected Garmin response-shape changes
 
-## User Signal Behavior
-- [IN_PROGRESS] Implement unknown-user registration flow with explicit strict-mode behavior.
-- [DONE] `strict_users=true` and `accept_first_seen_users=false`:
-  - Register unknown user in configured users.
-  - Do not track the incoming LiveTrack event.
-  - Do not send notifications for that event.
-- [DONE] `strict_users=false`:
-  - Register unknown user in configured users.
-  - Start tracking immediately with current global defaults.
-- [DONE] `strict_users=true` and `accept_first_seen_users=true`:
-  - Register unknown user in configured users.
-  - Track the first unknown-user event immediately using global defaults.
-  - Enforce one-event-only behavior until explicit user configuration enables ongoing tracking.
-- [PENDING] Prevent entity creation for rejected/register-only unknown-user events if any residual paths still instantiate runtime entities before policy rejection.
-- [PENDING] Replace generic fallback text in docs with the explicit strict/accept-first matrix.
+## User Policy
+- [DONE] Per-user notification settings
+- [DONE] Per-user activity override with global default fallback
+- [DONE] Per-user policy persistence
+- [DONE] Per-user policy editing in Options UI
+- [DONE] Case-insensitive internal user matching
+- [DONE] Global notification templates for start/end notifications
+- [PENDING] Improve `allowed_users` UX with autocomplete or suggestions while preserving free-text pre-registration
+- [PENDING] Add explicit per-user remove-user/admin controls in the Options UI instead of service-only management
+- [PENDING] Reduce ambiguity in the options flow when a user setting inherits the global default
 
-## Validation / Tests For User-level Settings
-- [PENDING] Add tests for per-user notification routing and fallback behavior.
-- [DONE] Add tests for per-user activity filter acceptance/rejection.
-- [DONE] Add diagnostics coverage to show per-user settings without leaking sensitive data.
-- [PENDING] Add tests for strict/accept-first signal matrix:
-  - strict=true, accept_first=false => register only, no tracking/notifications
-  - strict=false => register + immediate tracking
-  - strict=true, accept_first=true => first event tracked, later events require explicit enablement
-- [DONE] Add tests for case-insensitive user matching.
-- [PENDING] Add tests for options-flow user policy editing.
-- [PENDING] Add tests for notification message template formatting and fallback behavior.
+## Unknown User Handling
+- [DONE] `strict_users=true` and `accept_first_seen_users=false` registers unknown users and rejects tracking
+- [DONE] `strict_users=false` registers unknown users and starts tracking immediately
+- [DONE] `strict_users=true` and `accept_first_seen_users=true` accepts one event and then requires explicit user enablement
+- [PENDING] Prevent any residual entity creation for rejected/register-only unknown-user events before policy rejection
+- [PENDING] Tighten user-facing documentation around the strict/accept-first matrix
 
-## Session Lifecycle Hardening
-- [IN_PROGRESS] Add explicit no-END stale detection for stopped/discarded activity scenarios where Garmin never emits END.
-- [DONE] Add no-progress detection: if trackpoint timestamp/count does not advance for `stale_minutes`, transition to `stale` and finalize safely.
-- [DONE] Define fallback finalize path when session is still fetch-ok but effectively inactive (no END, no progress).
-- [DONE] Ensure `finalization_minutes` behavior is documented and covered when end is inferred vs explicit END.
-- [DONE] Finalize historical/manual ended sessions directly instead of leaving them in `ending`.
-- [DONE] Persist end reason on finalized sessions and expose it on retained status sensors.
+## Lifecycle
+- [DONE] No-progress detection
+- [DONE] Historical/manual ended sessions finalize directly as `ended`
+- [DONE] Fetch-ok inactive sessions can finalize through `ending` with `inactive_no_end`
+- [DONE] End reason is retained on finalized sessions
+- [DONE] Per-user status sensors retain ended-session state and summary values during retention
+- [PENDING] Cover true discarded/no-data no-END edge cases more deeply
+- [PENDING] Add test coverage for end-notification wording/fallback around `inactive_no_end`
 
-## Tests For No-END Cases
-- [PENDING] Add test: activity discarded immediately, no END event, session should stale/finalize without lingering forever.
-- [DONE] Add test: fetch remains ok but trackpoint data does not move; transition to stale after threshold.
-- [DONE] Add test: inferred-ending enters `ending` and exits to `ended` after `finalization_minutes`.
-- [DONE] Add test: historical ended URL added manually should go directly to `ended`.
-- [PENDING] Add test: end notification wording/fallback for `inactive_no_end`.
+## Diagnostics And Troubleshooting
+- [DONE] Startup timing breadcrumbs retained in runtime state
+- [DONE] Startup warning noise downgraded to debug
+- [DONE] Debug attributes gated behind the normal `Expose debug attributes` option
+- [DONE] `last_fetch` remains exposed by design
+- [DONE] `sensor.garmin_livetrack_last_error` exposes shape-change status/count
+- [DONE] Diagnostics expose effective User-Agent
+- [DONE] Diagnostics expose shape-change issue expectation
+- [PENDING] Expand automated tests around shape-change signal transitions
 
-## Client / Protocol
-- [PENDING] Make Garmin HTTP User-Agent configurable via options with safe default and validation.
-- [PENDING] Add diagnostics exposure for active User-Agent value in a safe/redacted form.
-- [IN_PROGRESS] Promote Garmin service-shape detection from heuristic flag to repair issue and explicit troubleshooting guidance.
-- [DONE] Use page-first fetch plus API fetch with hydration fallbacks rather than fixed-path parsing.
+## Entity Model
+- [DONE] Per-user status, active, and tracker entities attach to user devices
+- [DONE] Global entities attach to one integration device
+- [DONE] Session fallback device exists for sessions without a known user yet
+- [DONE] `garmin_livetrack.cleanup_legacy_entities` helper service
+- [DONE] `sensor.garmin_livetrack_session_count` removed
+- [DONE] Aggregate active-session summaries on `binary_sensor.garmin_livetrack_any_active`
+- [PENDING] Add one-time entity-registry migration strategy for superseded unique IDs if still needed
+- [PENDING] Add cleanup/migration tests that verify active entities are not removed
 
-## Entity Model / Cleanup
-- [DONE] Treat each configured Garmin display name/user policy as a Home Assistant device where practical.
-- [DONE] Attach that user's stable sensors/binary sensors/device tracker to the user device.
-- [DONE] Add an integration-level device for global sensors.
-- [DONE] Keep individual LiveTrack sessions as runtime data, not long-lived devices, unless a session has no known user.
-- [DONE] Document the limitation that Garmin display names are not guaranteed immutable or globally unique.
-- [DONE] Add `garmin_livetrack.cleanup_legacy_entities` helper service to identify/remove orphaned legacy per-session entities after per-user migration.
-- [DONE] Retain per-user status sensor values for ended sessions during the configured retention window.
-- [DONE] Add aggregate active-session summaries on `binary_sensor.garmin_livetrack_any_active`.
-- [DONE] Deprecate `sensor.garmin_livetrack_session_count`.
-- [PENDING] Add one-time entity registry migration strategy to map/disable superseded unique_ids safely.
-- [PENDING] Add docs section with cleanup steps and rollback guidance for entity migration changes.
-- [PENDING] Add tests for migration/cleanup behavior with no deletion of active entities.
+## Protocol
+- [DONE] Page-first fetch plus API fetch with hydration fallback
+- [DONE] Configurable HTTP User-Agent with validation
+- [DONE] Common User-Agent documentation and examples
+- [PENDING] Add focused tests around the configurable User-Agent path
 
-## Startup / Recovery
-- [DONE] Fix cross-thread `hass.async_create_task` scheduling in startup/recovery callbacks.
-- [DONE] Defer restored poller startup so storage restore does not immediately start polling during config entry setup.
-- [DONE] Add startup diagnostics for recovery timing and restored poller launch.
-- [PENDING] Decide whether temporary startup debug logging should remain, be downgraded, or be gated behind a debug option.
+## Tests
+- [DONE] Case-insensitive user matching tests
+- [DONE] Strict/accept-first matrix tests
+- [DONE] Notification template formatting/fallback tests
+- [DONE] Activity filter acceptance tests
+- [DONE] Ended-session retention tests
+- [DONE] Aggregate active-session attribute tests
+- [DONE] Cleanup regression test for deprecated `session_count`
+- [PENDING] Options-flow tests for user policy editing
+- [PENDING] Per-user notification routing/fallback tests
+- [PENDING] Additional no-END discarded-activity tests
 
-## Pre-Production Cleanup
-- [DONE] Decide final policy for temporary debug attributes on status sensor:
-  - keep `last_fetch` exposed
-  - gate `poll_task_alive`, `page_status`, `api_status`, and `trackpoints_source` behind explicit debug option
-- [DONE] Either remove these debug attributes or gate them behind an explicit debug option before production release.
-- [PENDING] Decide whether full LiveTrack URLs should remain exposed on status entities in production, given the privacy tradeoff versus user validation/debugging needs.
+## Operator Decisions Now Closed
+- [DONE] Full LiveTrack URLs stay exposed on status entities
+- [DONE] `Expose debug attributes` stays in the normal options UI as an advanced troubleshooting toggle
 
-## README / Docs (HACS Quality)
-- [DONE] Rewrite `README.md` to align with HACS best practices.
-- [DONE] Add architecture overview:
-  - ingest paths (IMAP + manual service)
-  - manager/coordinator lifecycle
-  - per-user entity model
-  - storage/recovery flow
-  - notification flow
-- [DONE] Add deep-dive section for Garmin fetch/parsing resiliency.
-- [DONE] Add API change resiliency/troubleshooting section.
-- [DONE] Add configuration tuning guide.
-- [DONE] Add operational/maintenance sections.
-- [DONE] Add privacy/security notes.
-- [DONE] Add limitations and roadmap.
-- [DONE] Add a repo-local architecture/implementation plan capturing current status and next phases.
-- [DONE] Document notification message template customization and supported placeholders.
+## Documentation
+- [DONE] README rewritten as operator-facing documentation
+- [DONE] Architecture plan updated to current behavior
+- [DONE] Notification template customization documented
+- [DONE] HTTP User-Agent option documented
+- [DONE] Local Windows and Linux test scripts documented
+- [PENDING] Add a short cleanup/migration guide for entity-registry transitions if the migration strategy changes

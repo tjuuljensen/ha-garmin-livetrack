@@ -1,4 +1,5 @@
 from custom_components.garmin_livetrack.config_flow import _normalize
+from custom_components.garmin_livetrack.const import DEFAULT_USER_AGENT
 
 def test_normalize_allowed_users():
     out=_normalize({'allowed_users':'alice, bob','notify_service':'notify.notify'}, include_users=True)
@@ -19,3 +20,15 @@ def test_normalize_notification_templates():
     assert out['user_agent'] == 'MyAgent/1.0'
     assert out['notification_start_template'] == 'Start {user} {activity}'
     assert out['notification_end_template'] == 'End {user} {reason}'
+
+
+def test_normalize_empty_user_agent_reverts_to_default():
+    out = _normalize(
+        {
+            'allowed_users': 'alice',
+            'notify_service': 'notify.notify',
+            'user_agent': '',
+        },
+        include_users=True,
+    )
+    assert out['user_agent'] == DEFAULT_USER_AGENT
