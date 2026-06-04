@@ -10,10 +10,12 @@ def test_normalize_notification_templates():
         {
             'allowed_users': 'alice',
             'notify_service': 'notify.notify',
+            'user_agent': 'MyAgent/1.0',
             'notification_start_template': 'Start {user} {activity}',
             'notification_end_template': 'End {user} {reason}',
         },
         include_users=True,
     )
+    assert out['user_agent'] == 'MyAgent/1.0'
     assert out['notification_start_template'] == 'Start {user} {activity}'
     assert out['notification_end_template'] == 'End {user} {reason}'

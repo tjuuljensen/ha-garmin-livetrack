@@ -12,6 +12,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
             **options,
             "notify_service": "redacted" if options.get("notify_service") else None,
         },
+        "effective_user_agent": manager._effective_user_agent(),
         "active_session_count": len(sessions),
         "ended_session_count": len(ended_sessions),
         "startup_debug": getattr(manager, "startup_debug", {}),

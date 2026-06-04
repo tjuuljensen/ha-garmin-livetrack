@@ -76,6 +76,7 @@ The integration uses one config entry with:
 - `Listen for IMAP events`
 - `Enable notifications`
 - `Notification target`
+- `HTTP User-Agent`
 - `Start notification message`
 - `End notification message`
 - `Use iOS-style notification payload`
@@ -124,6 +125,43 @@ Example templates:
 - End: {user} finished {activity} after {duration_min} min ({distance_km} km) - {reason}
 
 If a template is invalid, the integration falls back to the built-in default and logs a warning instead of breaking notifications.
+
+### Custom HTTP User-Agent
+The integration now lets you override the HTTP User-Agent used for Garmin page and API requests.
+
+Default:
+- `HomeAssistant-GarminLiveTrack/0.1.1`
+
+Why you might change it:
+- Garmin behavior appears to differ for different clients
+- you want troubleshooting parity with a browser session
+- you want a stable custom identifier while testing Garmin changes
+
+Why you usually should not change it:
+- the default is the least surprising integration behavior
+- random browser spoofing makes troubleshooting harder
+- a misleading User-Agent can hide real parsing/protocol problems
+
+Recommended approach:
+1. Start with the default.
+2. Only change it when testing a concrete Garmin behavior difference.
+3. Record the chosen value in your issue notes or diagnostics snapshot.
+
+Common examples you can test:
+- integration default:
+  - `HomeAssistant-GarminLiveTrack/0.1.1`
+- Windows Chrome:
+  - `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36`
+- macOS Safari:
+  - `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15`
+- iPhone Safari:
+  - `Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1`
+- Android Chrome:
+  - `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36`
+
+Validation notes:
+- the integration only accepts non-empty values up to 256 characters
+- the effective User-Agent is exposed in diagnostics because it is not sensitive
 
 ### User matching
 User policy matching is case-insensitive internally, but the original Garmin display name is preserved for display.
@@ -344,6 +382,14 @@ When enabled, the status sensor also exposes:
 - `trackpoints_source`
 - `poll_task_alive`
 
+### `HTTP User-Agent`
+This controls the User-Agent sent to Garmin for both the public LiveTrack page fetch and the session API request.
+
+Recommended guidance:
+- keep the default unless you are testing a specific Garmin behavior difference
+- if you switch to a browser-like value, keep it stable during the entire test period
+- if you find a Garmin regression, capture the exact User-Agent used
+
 ## Privacy And Security
 ### Sensitive data
 Garmin LiveTrack URLs contain a token. The integration treats that token as sensitive.
@@ -401,6 +447,8 @@ This can mean:
 - Garmin returned a transient incomplete payload
 
 Inspect diagnostics and the status sensor debug attributes before assuming the session is gone.
+
+If you are comparing behavior against a browser, also verify the configured `HTTP User-Agent` in diagnostics before drawing conclusions.
 
 ## Local Testing
 Run tests locally in a Python 3.12 virtual environment that matches CI expectations:

@@ -1,28 +1,32 @@
-# Purpose: Run local tests in an isolated Python 3.12 environment aligned with CI.
+# Purpose: Run the full local pytest suite in an isolated Python 3.12 environment aligned with CI.
 # Behavior:
-# - Creates (or reuses) `.venv-test` with Python 3.12.
+# - Creates (or reuses) `.venv-test` with the selected Python launcher.
 # - Installs test dependencies used by CI.
-# - Sets `PYTHONPATH` to repo root and runs `pytest -q`.
+# - Sets `PYTHONPATH` to repo root and runs `pytest -q` for the full repository test suite.
 # Usage:
 # - `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1`
 # - `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -RecreateVenv`
 # - `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -SkipInstall`
-# Version: 1.0.0
+# - `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -PythonCommand "py -3.12"`
+# - `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -PythonCommand "python3.12"`
+# Version: 1.1.0
 # Changelog:
+# - 1.1.0: Make Python launcher overridable and clarify that the script runs the full pytest suite.
 # - 1.0.0: Initial script for repeatable local CI-like test runs.
 # Inputs/Environment Variables:
-# - Requires Python 3.12 discoverable via `py -3.12`.
+# - `-PythonCommand`: optional Python launcher command used to create the venv. Defaults to `py -3.12`.
 # Outputs/Side Effects:
 # - Creates/updates `.venv-test` in repo root.
 # - Installs packages into `.venv-test`.
 # Prerequisites:
 # - Windows PowerShell
-# - Python launcher (`py`) with Python 3.12 installed
+# - Python 3.12 available via the chosen launcher command
 
 [CmdletBinding()]
 param(
     [switch]$RecreateVenv,
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [string]$PythonCommand = "py -3.12"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,12 +43,18 @@ if ($RecreateVenv -and (Test-Path $venvDir)) {
 }
 
 if (-not (Test-Path $venvPython)) {
-    Write-Host "Creating virtual environment with Python 3.12..."
-    & py -3.12 -m venv $venvDir
+    Write-Host "Creating virtual environment with Python launcher: $PythonCommand"
+    $pythonParts = $PythonCommand -split '\s+'
+    if ($pythonParts.Length -gt 1) {
+        & $pythonParts[0] $pythonParts[1..($pythonParts.Length - 1)] -m venv $venvDir
+    }
+    else {
+        & $pythonParts[0] -m venv $venvDir
+    }
 }
 
 if (-not (Test-Path $venvPython)) {
-    throw "Virtual environment creation failed. Ensure Python 3.12 is installed and available as 'py -3.12'."
+    throw "Virtual environment creation failed. Ensure Python 3.12 is installed and available via '$PythonCommand'."
 }
 
 if (-not $SkipInstall) {

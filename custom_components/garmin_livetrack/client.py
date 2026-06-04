@@ -12,6 +12,7 @@ import aiohttp
 from homeassistant.helpers import aiohttp_client
 
 from .models import LiveTrackError, LiveTrackIdentity, LiveTrackSource, redact_url
+from .const import DEFAULT_USER_AGENT
 
 SESSION_PATH_RE = re.compile(r"^/session/([^/\?]+)/token/([^/\?]+)")
 SESSION_QUERY_RE = re.compile(r"^/session/([^/\?]+)$")
@@ -47,6 +48,7 @@ class GarminLiveTrackClient:
             # Home Assistant instance.
             self.session = None
         self.request_timeout = request_timeout
+        self.user_agent = DEFAULT_USER_AGENT
 
     def parse_livetrack_identity(self, url: str | None, session_id: str | None = None, token: str | None = None, source: LiveTrackSource = LiveTrackSource.MANUAL) -> LiveTrackIdentity:
         raw = (url or "").replace("=\r\n", "").replace("=\n", "").strip()
@@ -77,7 +79,7 @@ class GarminLiveTrackClient:
         csrf = None
 
         try:
-            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": "HomeAssistant-GarminLiveTrack/0.1.1"}) as resp:
+            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": self.user_agent}) as resp:
                 result.page_status = resp.status
                 if resp.status >= 400:
                     result.errors.append(LiveTrackError("page_http_error", f"HTTP {resp.status}", datetime.now(UTC), True))
@@ -95,7 +97,7 @@ class GarminLiveTrackClient:
             return result
 
         headers = {
-            "User-Agent": "HomeAssistant-GarminLiveTrack/0.1.1",
+            "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
             "Referer": identity.canonical_url,
         }

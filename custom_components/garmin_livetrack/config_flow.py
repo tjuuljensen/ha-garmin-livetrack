@@ -24,6 +24,7 @@ from .const import (
     CONF_STALE_MINUTES,
     CONF_STRICT_USERS,
     CONF_UPDATE_INTERVAL,
+    CONF_USER_AGENT,
     CONF_USER_POLICIES,
     DEFAULT_ACCEPT_FIRST_SEEN_USERS,
     DEFAULT_ACTIVITY_FILTER,
@@ -43,6 +44,7 @@ from .const import (
     DEFAULT_STALE_MINUTES,
     DEFAULT_STRICT_USERS,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_USER_AGENT,
     DOMAIN,
 )
 
@@ -53,6 +55,7 @@ CONF_USER_ACTIVITY_MODE = "user_activity_mode"
 
 ERROR_INVALID_NOTIFY_SERVICE = "invalid_notify_service"
 ERROR_INVALID_ALLOWED_ACTIVITIES = "invalid_allowed_activities"
+ERROR_INVALID_USER_AGENT = "invalid_user_agent"
 
 
 def _notify_service_options(services: list[str], current: str | None = None, *, include_inherit: bool = False) -> list[str]:
@@ -93,6 +96,10 @@ def _global_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Required(
+                CONF_USER_AGENT,
+                default=defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
+            ): str,
             vol.Required(
                 CONF_NOTIFICATION_START_TEMPLATE,
                 default=defaults.get(
@@ -243,6 +250,10 @@ def _normalize(inp: dict, *, include_users: bool) -> dict:
     if notify_service and not notify_service.startswith("notify."):
         raise vol.Invalid("notify_service must look like notify.<target>")
     out[CONF_NOTIFY_SERVICE] = notify_service
+    user_agent = str(out.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or "").strip()
+    if not user_agent or len(user_agent) > 256:
+        raise vol.Invalid(ERROR_INVALID_USER_AGENT)
+    out[CONF_USER_AGENT] = user_agent
     out[CONF_NOTIFICATION_START_TEMPLATE] = str(
         out.get(CONF_NOTIFICATION_START_TEMPLATE, DEFAULT_NOTIFICATION_START_TEMPLATE) or DEFAULT_NOTIFICATION_START_TEMPLATE
     ).strip() or DEFAULT_NOTIFICATION_START_TEMPLATE
@@ -280,6 +291,8 @@ def _normalize_user_policy(inp: dict) -> dict:
 
 
 def _error_key(err: vol.Invalid) -> str:
+    if str(err) == ERROR_INVALID_USER_AGENT:
+        return ERROR_INVALID_USER_AGENT
     if str(err) == ERROR_INVALID_ALLOWED_ACTIVITIES:
         return ERROR_INVALID_ALLOWED_ACTIVITIES
     return ERROR_INVALID_NOTIFY_SERVICE

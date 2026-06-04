@@ -25,9 +25,11 @@ from .const import (
     CONF_STALE_MINUTES,
     CONF_STRICT_USERS,
     CONF_UPDATE_INTERVAL,
+    CONF_USER_AGENT,
     CONF_USER_POLICIES,
     DEFAULT_NOTIFICATION_END_TEMPLATE,
     DEFAULT_NOTIFICATION_START_TEMPLATE,
+    DEFAULT_USER_AGENT,
     EVENT_IMAP_CONTENT,
     EVENT_SESSION_ADDED,
     EVENT_SESSION_ENDED,
@@ -433,6 +435,7 @@ class GarminLiveTrackManager:
         self.shape_change_count = 0
         self._listeners: list[Callable[[], None]] = []
         self.startup_debug: dict[str, str | int | bool] = {}
+        self._sync_client_options()
 
     @staticmethod
     def _session_key(session_id: str) -> str:
@@ -445,6 +448,14 @@ class GarminLiveTrackManager:
     def _notify_listeners(self) -> None:
         for listener in list(self._listeners):
             listener()
+
+    def _effective_user_agent(self) -> str:
+        value = str(self.options.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT).strip()
+        return value or DEFAULT_USER_AGENT
+
+    def _sync_client_options(self) -> None:
+        if hasattr(self.client, "user_agent"):
+            self.client.user_agent = self._effective_user_agent()
 
     @staticmethod
     def _storage_payload(value: dict | None) -> dict:
@@ -474,6 +485,7 @@ class GarminLiveTrackManager:
         return _unsub
 
     async def async_setup(self):
+        self._sync_client_options()
         await self.async_load_storage()
         self._apply_option_user_policies()
         self._register_services()

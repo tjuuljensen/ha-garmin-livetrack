@@ -117,6 +117,13 @@ async def test_case_insensitive_user_policy_lookup(hass):
 
 
 @pytest.mark.asyncio
+async def test_configured_user_agent_is_applied_to_client(hass):
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {"user_agent": "CustomUA/2.0"})
+    await m.async_setup()
+    assert m.client.user_agent == "CustomUA/2.0"
+
+
+@pytest.mark.asyncio
 async def test_strict_false_registers_unknown_user_and_tracks_immediately(hass):
     m = GarminLiveTrackManager(
         hass,

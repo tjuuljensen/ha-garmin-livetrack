@@ -55,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _options_updated(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         rt = config_entry.runtime_data
         rt.manager.options = {**config_entry.data, **config_entry.options}
+        rt.manager._sync_client_options()
         rt.manager._apply_option_user_policies()
         await rt.manager._update_imap_listener()
         await rt.manager.async_save_storage()

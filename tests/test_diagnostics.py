@@ -9,7 +9,18 @@ async def test_diagnostics_redacts_notify(hass):
     class Runtime: pass
     entry = Entry()
     runtime = Runtime()
-    runtime.manager = type("M", (), {"options": {"notify_service": "notify.mobile"}, "sessions": {}, "ended_sessions": {}, "known_users": {}})()
+    runtime.manager = type(
+        "M",
+        (),
+        {
+            "options": {"notify_service": "notify.mobile", "user_agent": "CustomUA/2.0"},
+            "sessions": {},
+            "ended_sessions": {},
+            "known_users": {},
+            "_effective_user_agent": lambda self: "CustomUA/2.0",
+        },
+    )()
     entry.runtime_data = runtime
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["options"]["notify_service"] == "redacted"
+    assert data["effective_user_agent"] == "CustomUA/2.0"

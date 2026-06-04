@@ -8,6 +8,7 @@
                     "listen_to_imap_events": "Listen for IMAP events",
                     "enable_notifications": "Enable notifications",
                     "notify_service": "Notification target",
+                    "user_agent": "HTTP User-Agent",
                     "notification_start_template": "Start notification message",
                     "notification_end_template": "End notification message",
                     "ios_notification_style": "Use iOS-style notification payload",
@@ -28,6 +29,7 @@
                     "allowed_users": "Comma-separated Garmin display names.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
                     "notify_service": "Select a notify service such as notify.notify or notify.mobile_app_phone.",
+                    "user_agent": "HTTP User-Agent sent to Garmin. Leave the default unless Garmin behavior or troubleshooting requires a custom value.",
                     "notification_start_template": "Message template for start notifications. Supported placeholders: user, activity, source, url, session_id_hash.",
                     "notification_end_template": "Message template for end notifications. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "Expose advanced troubleshooting attributes such as API/page status and poll task state on session entities."
@@ -39,6 +41,7 @@
         },
         "error": {
             "invalid_notify_service": "Notify service must look like notify.something",
+            "invalid_user_agent": "User-Agent must be non-empty and 256 characters or fewer",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     },
@@ -51,6 +54,7 @@
                     "listen_to_imap_events": "Listen for IMAP events",
                     "enable_notifications": "Enable notifications",
                     "notify_service": "Notification target",
+                    "user_agent": "HTTP User-Agent",
                     "notification_start_template": "Start notification message",
                     "notification_end_template": "End notification message",
                     "ios_notification_style": "Use iOS-style notification payload",
@@ -72,6 +76,7 @@
                     "allowed_users": "Comma-separated Garmin display names for strict user control and to pre-register a user before their first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
                     "notify_service": "Default notify service for users without a custom override, for example notify.notify.",
+                    "user_agent": "HTTP User-Agent sent to Garmin for page and API requests.",
                     "notification_start_template": "Template used when a LiveTrack starts. Supported placeholders: user, activity, source, url, session_id_hash.",
                     "notification_end_template": "Template used when a LiveTrack ends. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "When enabled, session entities expose advanced troubleshooting attributes such as API/page status and poll task state.",
@@ -102,6 +107,7 @@
         },
         "error": {
             "invalid_notify_service": "Notify service must look like notify.something",
+            "invalid_user_agent": "User-Agent must be non-empty and 256 characters or fewer",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     }
