@@ -18,6 +18,11 @@ This project is functional but still under active development. Core functionalit
 - diagnostics with redaction
 
 Remaining work is mostly around tests, lifecycle hardening for no-END edge cases, and pre-production cleanup of temporary debug attributes.
+Recent changes include:
+- per-user ended-session retention on the status sensor
+- aggregate active-session attributes on `binary_sensor.garmin_livetrack_any_active`
+- explicit inactive-without-END lifecycle handling
+- customizable start/end notification message templates
 
 ## Important Warning
 Garmin LiveTrack is not a documented public API. Garmin has changed the public site and response shape multiple times over the years. This integration is intentionally defensive, but future Garmin changes can still break session parsing or trackpoint extraction.
@@ -71,6 +76,8 @@ The integration uses one config entry with:
 - `Listen for IMAP events`
 - `Enable notifications`
 - `Notification target`
+- `Start notification message`
+- `End notification message`
 - `Use iOS-style notification payload`
 - `Require configured users`
 - `Accept first event from unknown users`
@@ -93,6 +100,30 @@ Each known user can have overrides for:
 - iOS-style payload mode
 - activity filter mode (`inherit_global` or `custom`)
 - allowed activities when using custom mode
+
+### Notification message templates
+Global notification messages are now configurable from the integration options UI.
+
+Default templates:
+- start: `LiveTrack started: {user} ({activity})`
+- end: `LiveTrack ended: {user} ({activity}) - {reason}`
+
+Supported placeholders:
+- `user`
+- `activity`
+- `reason` for end notifications
+- `source`
+- `url`
+- `redacted_url`
+- `session_id_hash`
+- `distance_km`
+- `duration_min`
+
+Example templates:
+- Start: {user} started {activity}
+- End: {user} finished {activity} after {duration_min} min ({distance_km} km) - {reason}
+
+If a template is invalid, the integration falls back to the built-in default and logs a warning instead of breaking notifications.
 
 ### User matching
 User policy matching is case-insensitive internally, but the original Garmin display name is preserved for display.
@@ -132,6 +163,10 @@ Reload stored user policies.
 ### `garmin_livetrack.test_notification`
 Send a test notification using the current global notification settings.
 
+Note:
+- this service only validates the current notify target and delivery path
+- it does not render a full live session template context
+
 ### `garmin_livetrack.set_user_policy`
 Service-based user policy management.
 
@@ -158,14 +193,17 @@ Remove orphaned legacy Garmin LiveTrack entities after migration from older per-
 These are attached to one integration-level Garmin LiveTrack device:
 - `binary_sensor.garmin_livetrack_any_active`
 - `sensor.garmin_livetrack_active_count`
-- `sensor.garmin_livetrack_session_count`
 - `sensor.garmin_livetrack_last_error`
+
+`sensor.garmin_livetrack_session_count` has been deprecated and is no longer provided.
 
 ### Per-user entities
 Each known Garmin user gets a stable Home Assistant device with:
 - status sensor
 - active binary sensor
 - device tracker
+
+The per-user status sensor now retains the last ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops.
 
 The entity model is intentionally per-user, not per-session, so a new LiveTrack session updates the same user entities instead of creating endless new entity families.
 
@@ -209,6 +247,8 @@ Notifications are resolved in this order:
 2. global default
 
 The same pattern applies to activity filtering and iOS-style notification payload handling.
+
+Message body rendering uses the global notification templates from the options flow. Per-user routing still determines whether notifications are sent and which `notify` service receives them.
 
 ## Garmin Fetch / Parsing Resiliency
 ### Why the integration does page-first plus API fetch
@@ -260,13 +300,19 @@ Other terminal/problem states include:
 ### Finalization window
 `finalization_minutes` keeps a just-ended session alive briefly when the end is inferred rather than explicit, so the integration can pick up final points. Historical/manual ended sessions are finalized directly rather than sitting in `ending` unnecessarily.
 
+If Garmin keeps responding but a session stops making progress without emitting `END`, the integration now treats that as an inferred ending:
+- it enters `ending`
+- uses end reason `inactive_no_end`
+- waits through `finalization_minutes`
+- then finalizes as `ended`
+
 ### Stale detection
 Current stale handling includes:
 - no-progress detection based on trackpoint count/timestamp
 - timeout when a session never produces points after the initial wait window
 - stale finalization when fetches fail beyond the stale threshold
 
-The hardest remaining lifecycle gap is the Garmin case where an activity is stopped/discarded and Garmin never emits `END`. That is already on the task list for more direct tests and hardening.
+The main remaining lifecycle work is expanding test coverage and diagnostics around these inferred-ending paths rather than inventing more new states.
 
 ## Configuration Tuning
 ### `update_interval_seconds`
@@ -288,6 +334,15 @@ Controls how long inferred-ending sessions stay alive to capture late final data
 
 ### `defer_startup_poll_seconds`
 Delays restored pollers at startup to reduce Home Assistant startup pressure.
+
+### `Expose debug attributes`
+When disabled, the integration keeps troubleshooting-only attributes off the normal session status sensor surface.
+
+When enabled, the status sensor also exposes:
+- `page_status`
+- `api_status`
+- `trackpoints_source`
+- `poll_task_alive`
 
 ## Privacy And Security
 ### Sensitive data
@@ -320,7 +375,7 @@ Current status entities expose the full LiveTrack URL because that has been usef
 A restart is usually required after updating the custom integration. The integration has already seen compatibility issues around Home Assistant options-flow API changes, so always deploy the full updated custom component before retesting.
 
 ### Session stuck in `waiting_for_trackpoint`
-Use `refresh_session` or `refresh_all` to force a poll and inspect the status sensor debug attributes:
+Use `refresh_session` or `refresh_all` to force a poll and, if needed, temporarily enable `Expose debug attributes` to inspect:
 - `page_status`
 - `api_status`
 - `trackpoints_source`

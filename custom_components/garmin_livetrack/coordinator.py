@@ -19,11 +19,15 @@ from .const import (
     CONF_IOS_NOTIFICATION_STYLE,
     CONF_LISTEN_TO_IMAP_EVENTS,
     CONF_MAX_RUNTIME_HOURS,
+    CONF_NOTIFICATION_END_TEMPLATE,
+    CONF_NOTIFICATION_START_TEMPLATE,
     CONF_NOTIFY_SERVICE,
     CONF_STALE_MINUTES,
     CONF_STRICT_USERS,
     CONF_UPDATE_INTERVAL,
     CONF_USER_POLICIES,
+    DEFAULT_NOTIFICATION_END_TEMPLATE,
+    DEFAULT_NOTIFICATION_START_TEMPLATE,
     EVENT_IMAP_CONTENT,
     EVENT_SESSION_ADDED,
     EVENT_SESSION_ENDED,
@@ -101,6 +105,12 @@ def _display_end_reason(reason: str | None) -> str:
     if not reason:
         return "ended"
     return labels.get(reason, reason.replace("_", " "))
+
+
+def _format_float(value: float | None, digits: int = 2) -> str:
+    if value is None:
+        return ""
+    return f"{value:.{digits}f}"
 
 
 class LiveTrackSessionCoordinator:
@@ -1058,6 +1068,38 @@ class GarminLiveTrackManager:
             return bool(policy.ios_notification_style)
         return bool(self.options.get(CONF_IOS_NOTIFICATION_STYLE, False))
 
+    def _notification_context(self, session: LiveTrackSession, reason: str | None = None) -> dict[str, str]:
+        point = session.last_point
+        distance_km = (point.distance_m / 1000.0) if point and point.distance_m is not None else None
+        duration_min = (point.duration_s / 60.0) if point and point.duration_s is not None else None
+        return {
+            "user": session.garmin_user or "Unknown",
+            "activity": session.activity_type or "unknown",
+            "reason": _display_end_reason(reason),
+            "source": session.identity.source.value,
+            "url": session.identity.canonical_url,
+            "redacted_url": session.identity.redacted_url,
+            "session_id_hash": stable_session_hash(session.identity.session_id),
+            "distance_km": _format_float(distance_km, 2),
+            "duration_min": _format_float(duration_min, 1),
+        }
+
+    def _notification_message(
+        self,
+        session: LiveTrackSession,
+        *,
+        option_key: str,
+        default_template: str,
+        reason: str | None = None,
+    ) -> str:
+        template = str(self.options.get(option_key, default_template) or default_template).strip() or default_template
+        context = self._notification_context(session, reason)
+        try:
+            return template.format(**context)
+        except (KeyError, ValueError) as err:
+            _LOGGER.warning("Invalid Garmin LiveTrack notification template for %s: %s", option_key, err)
+            return default_template.format(**context)
+
     async def async_notify_start(self, session: LiveTrackSession):
         if not self._effective_notifications_enabled(session.garmin_user) or session.notification_started_sent:
             return
@@ -1066,7 +1108,13 @@ class GarminLiveTrackManager:
             self.last_error = "invalid_notify_service"
             return
         domain, service = target.split(".", 1)
-        payload = {"message": f"LiveTrack started: {session.garmin_user or 'Unknown'} ({session.activity_type or 'unknown'})"}
+        payload = {
+            "message": self._notification_message(
+                session,
+                option_key=CONF_NOTIFICATION_START_TEMPLATE,
+                default_template=DEFAULT_NOTIFICATION_START_TEMPLATE,
+            )
+        }
         if self._effective_ios_notification_style(session.garmin_user) and session.last_point:
             payload["data"] = {
                 "push": {"sound": {"name": "default", "critical": 0, "volume": 1.0}},
@@ -1084,9 +1132,11 @@ class GarminLiveTrackManager:
             return
         domain, service = target.split(".", 1)
         payload = {
-            "message": (
-                f"LiveTrack ended: {session.garmin_user or 'Unknown'} "
-                f"({session.activity_type or 'unknown'}) - {_display_end_reason(reason)}"
+            "message": self._notification_message(
+                session,
+                option_key=CONF_NOTIFICATION_END_TEMPLATE,
+                default_template=DEFAULT_NOTIFICATION_END_TEMPLATE,
+                reason=reason,
             )
         }
         if self._effective_ios_notification_style(session.garmin_user):

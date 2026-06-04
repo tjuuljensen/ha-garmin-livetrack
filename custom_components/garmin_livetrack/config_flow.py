@@ -17,6 +17,8 @@ from .const import (
     CONF_IOS_NOTIFICATION_STYLE,
     CONF_LISTEN_TO_IMAP_EVENTS,
     CONF_MAX_RUNTIME_HOURS,
+    CONF_NOTIFICATION_END_TEMPLATE,
+    CONF_NOTIFICATION_START_TEMPLATE,
     CONF_NOTIFY_SERVICE,
     CONF_RETAIN_ENDED_HOURS,
     CONF_STALE_MINUTES,
@@ -34,6 +36,8 @@ from .const import (
     DEFAULT_IOS_NOTIFICATION_STYLE,
     DEFAULT_LISTEN_TO_IMAP_EVENTS,
     DEFAULT_MAX_RUNTIME_HOURS,
+    DEFAULT_NOTIFICATION_END_TEMPLATE,
+    DEFAULT_NOTIFICATION_START_TEMPLATE,
     DEFAULT_NOTIFY_SERVICE,
     DEFAULT_RETAIN_ENDED_HOURS,
     DEFAULT_STALE_MINUTES,
@@ -89,6 +93,20 @@ def _global_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Required(
+                CONF_NOTIFICATION_START_TEMPLATE,
+                default=defaults.get(
+                    CONF_NOTIFICATION_START_TEMPLATE,
+                    DEFAULT_NOTIFICATION_START_TEMPLATE,
+                ),
+            ): selector.TemplateSelector(),
+            vol.Required(
+                CONF_NOTIFICATION_END_TEMPLATE,
+                default=defaults.get(
+                    CONF_NOTIFICATION_END_TEMPLATE,
+                    DEFAULT_NOTIFICATION_END_TEMPLATE,
+                ),
+            ): selector.TemplateSelector(),
             vol.Required(
                 CONF_IOS_NOTIFICATION_STYLE,
                 default=defaults.get(CONF_IOS_NOTIFICATION_STYLE, DEFAULT_IOS_NOTIFICATION_STYLE),
@@ -225,6 +243,12 @@ def _normalize(inp: dict, *, include_users: bool) -> dict:
     if notify_service and not notify_service.startswith("notify."):
         raise vol.Invalid("notify_service must look like notify.<target>")
     out[CONF_NOTIFY_SERVICE] = notify_service
+    out[CONF_NOTIFICATION_START_TEMPLATE] = str(
+        out.get(CONF_NOTIFICATION_START_TEMPLATE, DEFAULT_NOTIFICATION_START_TEMPLATE) or DEFAULT_NOTIFICATION_START_TEMPLATE
+    ).strip() or DEFAULT_NOTIFICATION_START_TEMPLATE
+    out[CONF_NOTIFICATION_END_TEMPLATE] = str(
+        out.get(CONF_NOTIFICATION_END_TEMPLATE, DEFAULT_NOTIFICATION_END_TEMPLATE) or DEFAULT_NOTIFICATION_END_TEMPLATE
+    ).strip() or DEFAULT_NOTIFICATION_END_TEMPLATE
     out.pop(CONF_EDIT_USER, None)
     return out
 

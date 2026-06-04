@@ -86,6 +86,9 @@ Recovered sessions are reconstructed from storage first and their pollers are st
 ### 6. Conservative token handling
 The integration keeps the token out of normal entity state, logs, and diagnostics. The token is retained only in storage for restart recovery.
 
+### 7. Customizable notification message templates
+Start/end notification routing still follows user override -> global default, but the message bodies themselves are now configurable global templates in the options flow. This keeps runtime notification logic simple while removing hard-coded user-facing message strings from Python.
+
 ## Recovery And Startup Lessons Learned
 The earlier rollout uncovered two important startup issues:
 1. cross-thread `hass.async_create_task` scheduling in startup/recovery callbacks
@@ -109,6 +112,9 @@ Both were fixed. Startup diagnostics were then added to make recovery timing vis
 - `list_users` action response
 - diagnostics redaction
 - cleanup service for orphaned legacy entities
+- customizable start/end notification messages
+- retained ended-session values on per-user status sensors
+- aggregate active-session summaries on the global active binary sensor
 
 ### Working, but still needs stronger validation
 - strict user matrix behavior
@@ -116,6 +122,7 @@ Both were fixed. Startup diagnostics were then added to make recovery timing vis
 - stale/no-END handling for discarded activities
 - Garmin shape-change detection and repair surfacing
 - options-flow UX edge cases
+- notification-template validation and formatting fallbacks
 
 ## Policy Semantics
 ### Global versus user-level defaults
@@ -130,6 +137,17 @@ This applies to:
 - iOS-style notification payload
 
 The current UI and reporting were adjusted to reflect this explicitly rather than implying a merge model.
+
+### Notification templates versus notification policy
+Notification policy answers:
+- whether a user gets notifications
+- which `notify` service is used
+- whether iOS-style payload data is attached
+
+Notification templates answer:
+- what human-facing message text is sent for start/end events
+
+This separation is intentional. Per-user routing remains policy-driven, while message phrasing remains a single global integration concern for now.
 
 ### Unknown-user behavior
 Current logic supports:
@@ -161,7 +179,14 @@ The integration currently relies on Garmin `userDisplayName`. That is practical 
 This remains intentionally enabled today for validation/debugging and inline display use. It is a known privacy tradeoff that must be decided before production release.
 
 ### 4. Temporary debug attributes
-Status entities currently expose some temporary debugging attributes that are useful during development but may be too noisy for a production-quality release.
+This is largely resolved:
+- `last_fetch` stays exposed
+- `page_status`, `api_status`, `trackpoints_source`, and `poll_task_alive` are gated behind an explicit debug option
+
+The remaining open question is whether that option should remain in the normal options UI for a production release or move behind a more explicit troubleshooting path.
+
+### 5. Notification-template scope
+Notification message customization is currently global, not per-user and not locale-aware by HA frontend language. That is acceptable for now, but if multilingual defaults or per-user phrasing become important later, that should be a separate follow-up rather than being folded into the current policy model.
 
 ## Recommended Next Phases
 ### Phase A - Tests and policy confidence
@@ -169,11 +194,12 @@ Status entities currently expose some temporary debugging attributes that are us
 - add tests for case-insensitive user matching
 - add tests for strict/accept-first matrix
 - add tests for options-flow per-user edits
+- add tests for notification-template formatting and invalid-template fallback
 
 ### Phase B - Lifecycle hardening
-- strengthen no-END stale handling
-- define final inactive-but-fetch-ok finalize path
-- document and test `finalization_minutes` behavior for inferred endings
+- strengthen no-END stale handling for true discarded/no-data edge cases
+- keep the current inactive-but-fetch-ok finalize path stable and expand tests rather than inventing new states
+- keep `ended` as the user-facing terminal state and use `end_reason` for differentiation
 
 ### Phase C - Protocol and diagnostics polish
 - make User-Agent configurable

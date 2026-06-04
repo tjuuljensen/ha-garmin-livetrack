@@ -7,6 +7,7 @@
   - `ios_notification_style`
 - [DONE] Add per-user activity filter override using the global filter as the default when no user override exists.
 - [DONE] Persist per-user policy/settings in integration storage and expose management in Options UI.
+- [DONE] Add global notification message templates for start/end notifications.
 - [DONE] Define fallback precedence:
   - user override -> global default
   - unknown user behavior with `accept_first_seen_users`
@@ -32,27 +33,30 @@
 
 ## Validation / Tests For User-level Settings
 - [PENDING] Add tests for per-user notification routing and fallback behavior.
-- [PENDING] Add tests for per-user activity filter acceptance/rejection.
+- [DONE] Add tests for per-user activity filter acceptance/rejection.
 - [DONE] Add diagnostics coverage to show per-user settings without leaking sensitive data.
 - [PENDING] Add tests for strict/accept-first signal matrix:
   - strict=true, accept_first=false => register only, no tracking/notifications
   - strict=false => register + immediate tracking
   - strict=true, accept_first=true => first event tracked, later events require explicit enablement
-- [PENDING] Add tests for case-insensitive user matching.
+- [DONE] Add tests for case-insensitive user matching.
 - [PENDING] Add tests for options-flow user policy editing.
+- [PENDING] Add tests for notification message template formatting and fallback behavior.
 
 ## Session Lifecycle Hardening
 - [IN_PROGRESS] Add explicit no-END stale detection for stopped/discarded activity scenarios where Garmin never emits END.
 - [DONE] Add no-progress detection: if trackpoint timestamp/count does not advance for `stale_minutes`, transition to `stale` and finalize safely.
-- [PENDING] Define fallback finalize path when session is still fetch-ok but effectively inactive (no END, no progress).
-- [PENDING] Ensure `finalization_minutes` behavior is documented and covered when end is inferred vs explicit END.
+- [DONE] Define fallback finalize path when session is still fetch-ok but effectively inactive (no END, no progress).
+- [DONE] Ensure `finalization_minutes` behavior is documented and covered when end is inferred vs explicit END.
 - [DONE] Finalize historical/manual ended sessions directly instead of leaving them in `ending`.
+- [DONE] Persist end reason on finalized sessions and expose it on retained status sensors.
 
 ## Tests For No-END Cases
 - [PENDING] Add test: activity discarded immediately, no END event, session should stale/finalize without lingering forever.
-- [PENDING] Add test: fetch remains ok but trackpoint data does not move; transition to stale after threshold.
-- [PENDING] Add test: inferred-ending enters `ending` and exits to `ended` after `finalization_minutes`.
-- [PENDING] Add test: historical ended URL added manually should go directly to `ended`.
+- [DONE] Add test: fetch remains ok but trackpoint data does not move; transition to stale after threshold.
+- [DONE] Add test: inferred-ending enters `ending` and exits to `ended` after `finalization_minutes`.
+- [DONE] Add test: historical ended URL added manually should go directly to `ended`.
+- [PENDING] Add test: end notification wording/fallback for `inactive_no_end`.
 
 ## Client / Protocol
 - [PENDING] Make Garmin HTTP User-Agent configurable via options with safe default and validation.
@@ -67,6 +71,9 @@
 - [DONE] Keep individual LiveTrack sessions as runtime data, not long-lived devices, unless a session has no known user.
 - [DONE] Document the limitation that Garmin display names are not guaranteed immutable or globally unique.
 - [DONE] Add `garmin_livetrack.cleanup_legacy_entities` helper service to identify/remove orphaned legacy per-session entities after per-user migration.
+- [DONE] Retain per-user status sensor values for ended sessions during the configured retention window.
+- [DONE] Add aggregate active-session summaries on `binary_sensor.garmin_livetrack_any_active`.
+- [DONE] Deprecate `sensor.garmin_livetrack_session_count`.
 - [PENDING] Add one-time entity registry migration strategy to map/disable superseded unique_ids safely.
 - [PENDING] Add docs section with cleanup steps and rollback guidance for entity migration changes.
 - [PENDING] Add tests for migration/cleanup behavior with no deletion of active entities.
@@ -78,13 +85,10 @@
 - [PENDING] Decide whether temporary startup debug logging should remain, be downgraded, or be gated behind a debug option.
 
 ## Pre-Production Cleanup
-- [PENDING] Decide final policy for temporary debug attributes on status sensor:
-  - `poll_task_alive`
-  - `page_status`
-  - `api_status`
-  - `trackpoints_source`
-  - `last_fetch`
-- [PENDING] Either remove these debug attributes or gate them behind an explicit debug option before production release.
+- [DONE] Decide final policy for temporary debug attributes on status sensor:
+  - keep `last_fetch` exposed
+  - gate `poll_task_alive`, `page_status`, `api_status`, and `trackpoints_source` behind explicit debug option
+- [DONE] Either remove these debug attributes or gate them behind an explicit debug option before production release.
 - [PENDING] Decide whether full LiveTrack URLs should remain exposed on status entities in production, given the privacy tradeoff versus user validation/debugging needs.
 
 ## README / Docs (HACS Quality)
@@ -102,3 +106,4 @@
 - [DONE] Add privacy/security notes.
 - [DONE] Add limitations and roadmap.
 - [DONE] Add a repo-local architecture/implementation plan capturing current status and next phases.
+- [DONE] Document notification message template customization and supported placeholders.

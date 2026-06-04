@@ -8,6 +8,8 @@
                     "listen_to_imap_events": "Listen for IMAP events",
                     "enable_notifications": "Enable notifications",
                     "notify_service": "Notification target",
+                    "notification_start_template": "Start notification message",
+                    "notification_end_template": "End notification message",
                     "ios_notification_style": "Use iOS-style notification payload",
                     "strict_users": "Require configured users",
                     "accept_first_seen_users": "Accept first event from unknown users",
@@ -25,7 +27,9 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
-                    "notify_service": "Select a notify.<target> service.",
+                    "notify_service": "Select a notify service such as notify.notify or notify.mobile_app_phone.",
+                    "notification_start_template": "Message template for start notifications. Supported placeholders: user, activity, source, url, session_id_hash.",
+                    "notification_end_template": "Message template for end notifications. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "Expose advanced troubleshooting attributes such as API/page status and poll task state on session entities."
                 }
             }
@@ -34,7 +38,7 @@
             "single_instance_allowed": "Only one Garmin LiveTrack configuration is allowed"
         },
         "error": {
-            "invalid_notify_service": "Notify service must look like notify.<target>",
+            "invalid_notify_service": "Notify service must look like notify.something",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     },
@@ -47,6 +51,8 @@
                     "listen_to_imap_events": "Listen for IMAP events",
                     "enable_notifications": "Enable notifications",
                     "notify_service": "Notification target",
+                    "notification_start_template": "Start notification message",
+                    "notification_end_template": "End notification message",
                     "ios_notification_style": "Use iOS-style notification payload",
                     "strict_users": "Require configured users",
                     "accept_first_seen_users": "Accept first event from unknown users",
@@ -63,9 +69,11 @@
                     "edit_user": "Edit user"
                 },
                 "data_description": {
-                    "allowed_users": "Comma-separated Garmin display names. Free text is kept so you can pre-register a user before their first LiveTrack arrives.",
+                    "allowed_users": "Comma-separated Garmin display names for strict user control and to pre-register a user before their first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
-                    "notify_service": "Default notify.<target> service for users without a custom override.",
+                    "notify_service": "Default notify service for users without a custom override, for example notify.notify.",
+                    "notification_start_template": "Template used when a LiveTrack starts. Supported placeholders: user, activity, source, url, session_id_hash.",
+                    "notification_end_template": "Template used when a LiveTrack ends. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "When enabled, session entities expose advanced troubleshooting attributes such as API/page status and poll task state.",
                     "edit_user": "Select a configured user to edit per-user policy."
                 }
@@ -85,7 +93,7 @@
                 "data_description": {
                     "mode": "normal tracks normally, register_only records the user but does not track, one_event_only allows one accepted event before disabling.",
                     "user_enable_notifications_mode": "Inherit the global notification setting or override it for this user.",
-                    "notify_service": "Choose inherit_global to use the integration default, or pick a specific notify.<target> service.",
+                    "notify_service": "Choose inherit_global to use the integration default, or pick a specific notify service such as notify.mobile_app_phone.",
                     "user_ios_notification_style_mode": "Inherit the global iOS payload style or override it for this user.",
                     "user_activity_mode": "inherit_global uses the global default activity filter. custom overrides it for this user.",
                     "allowed_activities": "Only used when Activity filter mode is custom."
@@ -93,7 +101,7 @@
             }
         },
         "error": {
-            "invalid_notify_service": "Notify service must look like notify.<target>",
+            "invalid_notify_service": "Notify service must look like notify.something",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     }
