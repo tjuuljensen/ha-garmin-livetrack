@@ -11,6 +11,7 @@ from .const import (
     CONF_ALLOWED_USERS,
     CONF_DEFER_STARTUP_POLL_SECONDS,
     CONF_ENABLE_NOTIFICATIONS,
+    CONF_EXPOSE_DEBUG_ATTRIBUTES,
     CONF_FINALIZATION_MINUTES,
     CONF_INITIAL_TRACKPOINT_WAIT,
     CONF_IOS_NOTIFICATION_STYLE,
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_ALLOWED_USERS,
     DEFAULT_DEFER_STARTUP_POLL_SECONDS,
     DEFAULT_ENABLE_NOTIFICATIONS,
+    DEFAULT_EXPOSE_DEBUG_ATTRIBUTES,
     DEFAULT_FINALIZATION_MINUTES,
     DEFAULT_INITIAL_TRACKPOINT_WAIT,
     DEFAULT_IOS_NOTIFICATION_STYLE,
@@ -141,6 +143,10 @@ def _global_schema(
                     DEFAULT_DEFER_STARTUP_POLL_SECONDS,
                 ),
             ): vol.All(int, vol.Range(min=0, max=900)),
+            vol.Required(
+                CONF_EXPOSE_DEBUG_ATTRIBUTES,
+                default=defaults.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES),
+            ): bool,
         }
     if known_users:
         fields[vol.Optional(CONF_EDIT_USER)] = selector.SelectSelector(

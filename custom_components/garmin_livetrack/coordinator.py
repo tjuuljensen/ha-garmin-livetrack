@@ -86,6 +86,23 @@ class UserPolicy:
     allowed_activities: list[str] | None = None
 
 
+def _display_end_reason(reason: str | None) -> str:
+    labels = {
+        "end_event": "Garmin END event",
+        "session_end": "Garmin session end",
+        "inactive_no_end": "inactive without Garmin END",
+        "no_progress": "no progress",
+        "no_trackpoints": "no trackpoints",
+        "fetch_stale": "fetch timeout",
+        "max_runtime": "max runtime reached",
+        "manual": "manually stopped",
+        "ended": "ended",
+    }
+    if not reason:
+        return "ended"
+    return labels.get(reason, reason.replace("_", " "))
+
+
 class LiveTrackSessionCoordinator:
     def __init__(self, manager: GarminLiveTrackManager, session: LiveTrackSession) -> None:
         self.manager = manager
@@ -492,6 +509,7 @@ class GarminLiveTrackManager:
     async def async_finalize_session(self, coord: LiveTrackSessionCoordinator, reason: str) -> None:
         sid = self._session_key(coord.session.identity.session_id)
         self.sessions.pop(sid, None)
+        coord.session.end_reason = reason
         self.ended_sessions[sid] = coord.session
         coord.session.actual_end = coord.session.actual_end or datetime.now(UTC)
         await self.async_notify_end(coord.session, reason)
@@ -506,6 +524,7 @@ class GarminLiveTrackManager:
             return
         await coord.async_stop(reason)
         coord.session.status = LiveTrackStatus.STOPPED
+        coord.session.end_reason = reason
         coord.session.actual_end = datetime.now(UTC)
         self.ended_sessions[sid] = coord.session
         self.hass.bus.async_fire(EVENT_SESSION_UPDATED, {"session_id_hash": stable_session_hash(sid), "status": LiveTrackStatus.STOPPED.value, "reason": reason})
@@ -1064,7 +1083,12 @@ class GarminLiveTrackManager:
             self.last_error = "invalid_notify_service"
             return
         domain, service = target.split(".", 1)
-        payload = {"message": f"LiveTrack ended: {session.garmin_user or 'Unknown'} ({session.activity_type or 'unknown'}) - {reason}"}
+        payload = {
+            "message": (
+                f"LiveTrack ended: {session.garmin_user or 'Unknown'} "
+                f"({session.activity_type or 'unknown'}) - {_display_end_reason(reason)}"
+            )
+        }
         if self._effective_ios_notification_style(session.garmin_user):
             payload["data"] = {
                 "push": {"sound": {"name": "default", "critical": 0, "volume": 1.0}},

@@ -128,11 +128,31 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
     attrs = entity.extra_state_attributes
     assert attrs["garmin_user"] == "Runner"
     assert attrs["activity"] == "running"
+    assert attrs["source"] == "service"
     assert attrs["distance_km"] == 12.345
     assert attrs["duration_min"] == 60.0
     assert attrs["heart_rate_bpm"] == 150
     assert attrs["activity_icon"] == "mdi:run"
     assert attrs["status_icon"] == "mdi:check-circle-outline"
+    assert "page_status" not in attrs
+    assert "api_status" not in attrs
+    assert "trackpoints_source" not in attrs
+    assert "poll_task_alive" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_user_status_sensor_exposes_debug_attributes_when_enabled(hass):
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {"expose_debug_attributes": True})
+    await m.async_setup()
+    await m.async_add_url("https://livetrack.garmin.com/session/abc/token/def", LiveTrackSource.SERVICE)
+
+    entity = GarminUserStatusSensor(m, "runner")
+    attrs = entity.extra_state_attributes
+    assert attrs["source"] == "service"
+    assert attrs["page_status"] == 200
+    assert attrs["api_status"] == 200
+    assert attrs["trackpoints_source"] == "api_or_payload"
+    assert "poll_task_alive" in attrs
 
 
 @pytest.mark.asyncio
@@ -148,6 +168,7 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
     assert attrs["active_users"] == ["Runner"]
     assert attrs["active_activities"] == ["running"]
     assert attrs["active_summaries"][0]["status"] == "active"
+    assert attrs["active_summaries"][0]["source"] == "service"
 
 
 @pytest.mark.asyncio
@@ -220,6 +241,8 @@ async def test_no_end_no_progress_transitions_to_ending_then_ended(hass):
     assert coord.end_reason == "inactive_no_end"
     await coord._refresh_once()
     assert coord.session.status == LiveTrackStatus.ENDED
+    assert coord.session.end_reason == "inactive_no_end"
+    assert m.ended_sessions["stale-1"].end_reason == "inactive_no_end"
     assert "stale-1" in m.ended_sessions
 
 
@@ -313,4 +336,5 @@ async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
     await coord._refresh_once()
     assert coord.session.status == LiveTrackStatus.ENDED
     assert coord.end_reason == "session_end"
+    assert coord.session.end_reason == "session_end"
     assert "ended-1" in m.ended_sessions

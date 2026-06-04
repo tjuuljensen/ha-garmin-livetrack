@@ -71,6 +71,7 @@ class GarminAnyActiveBinarySensor(_BaseBinary):
                 "user": c.session.garmin_user or f"session:{stable_session_hash(c.session.identity.session_id)[:8]}",
                 "activity": c.session.activity_type or "other",
                 "status": c.session.status.value,
+                "source": c.session.identity.source.value,
                 "session_id_hash": stable_session_hash(c.session.identity.session_id),
             }
             for c in active

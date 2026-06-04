@@ -80,6 +80,7 @@ class LiveTrackSession:
     status: LiveTrackStatus
     errors: list[LiveTrackError] = field(default_factory=list)
     rejected_reason: str | None = None
+    end_reason: str | None = None
     notification_started_sent: bool = False
     notification_ended_sent: bool = False
 

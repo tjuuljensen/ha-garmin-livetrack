@@ -3,7 +3,7 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
+from .const import CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES, DOMAIN
 from .icons import activity_icon
 from .models import stable_session_hash
 
@@ -299,21 +299,28 @@ class GarminUserStatusSensor(_BaseManagerSensor):
             "entity_key": self.entity_key,
             "session_id_hash": stable_session_hash(s.identity.session_id),
             "url": s.identity.canonical_url,
+            "source": s.identity.source.value,
             "garmin_user": s.garmin_user,
             "activity": s.activity_type,
             "status_icon": _status_icon(s.status.value),
             "activity_icon": activity_icon(s.activity_type, s.status.value == "active"),
+            "end_reason": s.end_reason,
             "start": s.start.isoformat() if s.start else None,
             "expected_end": s.expected_end.isoformat() if s.expected_end else None,
             "actual_end": s.actual_end.isoformat() if s.actual_end else None,
             "trackpoint_count": s.trackpoint_count,
             "last_fetch": s.last_fetch.isoformat() if s.last_fetch else None,
             "last_success": s.last_success.isoformat() if s.last_success else None,
-            "page_status": coord.last_page_status if coord else None,
-            "api_status": coord.last_api_status if coord else None,
-            "trackpoints_source": coord.last_source_branch if coord else "ended",
-            "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
         }
+        if self.manager.options.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES):
+            attrs.update(
+                {
+                    "page_status": coord.last_page_status if coord else None,
+                    "api_status": coord.last_api_status if coord else None,
+                    "trackpoints_source": coord.last_source_branch if coord else "ended",
+                    "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
+                }
+            )
         attrs.update(_summary_metrics(s))
         return attrs
 
