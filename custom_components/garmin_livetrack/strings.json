@@ -15,7 +15,7 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
-                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning."
+                    "update_profile": "Polling rules: Extended 10min, Conservative 60sec, Balanced 30sec, Adaptive: 15sec metadata w. trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning."
                 }
             }
         },

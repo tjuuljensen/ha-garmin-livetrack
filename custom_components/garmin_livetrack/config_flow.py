@@ -357,14 +357,14 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
                 normalized = _normalize(user_input, include_users=True)
                 selected_user = str(user_input.get(CONF_EDIT_USER, "") or "").strip()
                 merged = {**defaults, **normalized}
-                if normalized.get(CONF_UPDATE_PROFILE) == "custom":
-                    self._pending_options = merged
-                    self._selected_user = selected_user or None
-                    return await self.async_step_advanced_profile()
                 if selected_user:
                     self._pending_options = merged
                     self._selected_user = selected_user
                     return await self.async_step_user_policy()
+                if normalized.get(CONF_UPDATE_PROFILE) == "custom":
+                    self._pending_options = merged
+                    self._selected_user = None
+                    return await self.async_step_advanced_profile()
                 return self.async_create_entry(title="", data=merged)
             except vol.Invalid as err:
                 errors["base"] = _error_key(err)
