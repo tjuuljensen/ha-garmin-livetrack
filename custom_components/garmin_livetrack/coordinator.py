@@ -1275,17 +1275,16 @@ class GarminLiveTrackManager:
     def _remove_user_registry_entities(self, key: str) -> int:
         registry = er.async_get(self.hass)
         hash_part = stable_session_hash(key)
-        expected = {
-            f"garmin_livetrack_user_status_{hash_part}",
-            f"garmin_livetrack_user_active_{hash_part}",
-            f"garmin_livetrack_user_tracker_{hash_part}",
-        }
+        lookup_specs = [
+            ("sensor", f"garmin_livetrack_user_status_{hash_part}"),
+            ("binary_sensor", f"garmin_livetrack_user_active_{hash_part}"),
+            ("device_tracker", f"garmin_livetrack_user_tracker_{hash_part}"),
+        ]
         removed = 0
-        for entry in list(registry.entities.values()):
-            if entry.platform != DOMAIN:
-                continue
-            if entry.unique_id in expected:
-                registry.async_remove(entry.entity_id)
+        for entity_domain, unique_id in lookup_specs:
+            entity_id = registry.async_get_entity_id(entity_domain, DOMAIN, unique_id)
+            if entity_id:
+                registry.async_remove(entity_id)
                 removed += 1
 
         device_registry = dr.async_get(self.hass)
