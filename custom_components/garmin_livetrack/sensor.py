@@ -120,7 +120,6 @@ def _summary_metrics(session):
             "speed_mps": None,
             "speed_kmh": None,
             "pace_min_km": None,
-            "pace_min_per_km": None,
             "heart_rate_bpm": None,
             "power_w": None,
             "cadence": None,
@@ -146,7 +145,6 @@ def _summary_metrics(session):
         "speed_mps": point.speed_mps,
         "speed_kmh": speed_kmh,
         "pace_min_km": pace_min_km,
-        "pace_min_per_km": pace_min_km,
         "heart_rate_bpm": point.heart_rate_bpm,
         "power_w": point.power_w,
         "cadence": point.cadence,
@@ -333,18 +331,20 @@ class GarminUserStatusSensor(_BaseManagerSensor):
             "last_success": s.last_success.isoformat() if s.last_success else None,
         }
         if self.manager.options.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES):
+            ended_debug = getattr(self.manager, "ended_session_debug", {})
+            debug = ended_debug.get(s.identity.session_id, {}) if coord is None else {}
             attrs.update(
                 {
-                    "page_status": coord.last_page_status if coord else None,
-                    "api_status": coord.last_api_status if coord else None,
-                    "trackpoints_source": coord.last_source_branch if coord else "ended",
+                    "page_status": coord.last_page_status if coord else debug.get("page_status"),
+                    "api_status": coord.last_api_status if coord else debug.get("api_status"),
+                    "trackpoints_source": coord.last_source_branch if coord else debug.get("trackpoints_source", "ended"),
                     "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
-                    "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else None,
-                    "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else None,
-                    "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else None,
-                    "backoff_until": coord.backoff_until.isoformat() if coord and coord.backoff_until else None,
-                    "consecutive_http_failures": coord.consecutive_http_failures if coord else 0,
-                    "last_http_status": coord.last_http_status if coord else None,
+                    "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else debug.get("post_trackpoint_frequency_s"),
+                    "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else debug.get("last_trackpoint_fetch"),
+                    "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else debug.get("next_trackpoints_allowed_at"),
+                    "backoff_until": coord.backoff_until.isoformat() if coord and coord.backoff_until else debug.get("backoff_until"),
+                    "consecutive_http_failures": coord.consecutive_http_failures if coord else debug.get("consecutive_http_failures", 0),
+                    "last_http_status": coord.last_http_status if coord else debug.get("last_http_status"),
                 }
             )
         attrs.update(_summary_metrics(s))

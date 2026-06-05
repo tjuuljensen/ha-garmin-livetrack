@@ -198,6 +198,43 @@ def test_point_sequence_derives_missing_duration_and_distance(hass):
     assert point.speed_mps == pytest.approx(point.distance_m / 300.0, rel=0.01)
 
 
+def test_point_sequence_preserves_previous_metrics_when_final_point_is_sparse(hass):
+    start = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
+    identity = LiveTrackIdentity(
+        "sparse-end",
+        "token",
+        "https://livetrack.garmin.com/session/sparse-end/token/token",
+        "redacted",
+        LiveTrackSource.SERVICE,
+    )
+    session = LiveTrackSession(identity, "Runner", "walking", start, None, None, start, None, None, None, 0, LiveTrackStatus.ACTIVE)
+    coord = LiveTrackSessionCoordinator(m, session)
+
+    point = coord._to_point_sequence(
+        [
+            {
+                "dateTime": "2026-01-01T10:15:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "fitnessPointData": {
+                    "altitudeMeters": 25.91,
+                    "heartRateInBeatsPerMinute": 123,
+                },
+            },
+            {
+                "dateTime": "2026-01-01T10:16:00Z",
+                "position": {"lat": 55.6701, "lon": 12.5601},
+                "eventTypes": ["END"],
+            },
+        ],
+        None,
+    )
+
+    assert point.altitude_m == 25.91
+    assert point.heart_rate_bpm == 123
+    assert point.duration_s == 960
+
+
 class SequenceClient:
     def __init__(self, fetches):
         self._fetches = list(fetches)
@@ -468,6 +505,8 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
     assert attrs["speed_mps"] == 3.5
     assert attrs["speed_kmh"] == 12.6
     assert attrs["pace_min_km"] == 4.76
+    assert "pace_min_per_km" not in attrs
+    assert attrs["altitude_m"] == 42
     assert attrs["cadence"] == 88
     assert attrs["has_location"] is False
     assert attrs["heart_rate_bpm"] == 150
@@ -511,9 +550,25 @@ async def test_ended_session_summary_persists_across_restore(hass):
         end_reason="inactive_no_end",
     )
     first.ended_sessions["ended-persist"] = session
+    first.ended_session_debug["ended-persist"] = {
+        "page_status": 200,
+        "api_status": 200,
+        "trackpoints_source": "trackpoints_common",
+        "post_trackpoint_frequency_s": 15,
+        "last_trackpoint_fetch": (base + timedelta(minutes=46)).isoformat(),
+        "next_trackpoints_allowed_at": (base + timedelta(minutes=47)).isoformat(),
+        "backoff_until": None,
+        "consecutive_http_failures": 0,
+        "last_http_status": None,
+    }
     await first.async_save_storage()
 
-    restored = GarminLiveTrackManager(hass, DummyClient(), store, {"retain_ended_hours": 24})
+    restored = GarminLiveTrackManager(
+        hass,
+        DummyClient(),
+        store,
+        {"retain_ended_hours": 24, "expose_debug_attributes": True},
+    )
     await restored.async_setup()
     await restored.async_restore_sessions_from_storage()
 
@@ -531,10 +586,11 @@ async def test_ended_session_summary_persists_across_restore(hass):
     assert attrs["distance_km"] == 5.432
     assert attrs["duration_min"] == 30.0
     assert attrs["heart_rate_bpm"] == 142
-    assert "page_status" not in attrs
-    assert "api_status" not in attrs
-    assert "trackpoints_source" not in attrs
-    assert "poll_task_alive" not in attrs
+    assert attrs["page_status"] == 200
+    assert attrs["api_status"] == 200
+    assert attrs["trackpoints_source"] == "trackpoints_common"
+    assert attrs["post_trackpoint_frequency_s"] == 15
+    assert attrs["poll_task_alive"] is False
 
 
 @pytest.mark.asyncio

@@ -644,6 +644,15 @@ class LiveTrackSessionCoordinator:
         return 2 * radius_m * math.asin(math.sqrt(h))
 
     def _enrich_point(self, point: LiveTrackPoint, previous_point: LiveTrackPoint | None) -> None:
+        if previous_point is not None:
+            for attr in (
+                "altitude_m",
+                "heart_rate_bpm",
+                "power_w",
+                "cadence",
+            ):
+                if getattr(point, attr) is None:
+                    setattr(point, attr, getattr(previous_point, attr))
         if point.duration_s is None and self.session.start and point.timestamp:
             start = self.session.start.replace(tzinfo=UTC) if self.session.start.tzinfo is None else self.session.start
             timestamp = point.timestamp.replace(tzinfo=UTC) if point.timestamp.tzinfo is None else point.timestamp
@@ -759,6 +768,7 @@ class GarminLiveTrackManager:
         self.options = options
         self.sessions: dict[str, LiveTrackSessionCoordinator] = {}
         self.ended_sessions: dict[str, LiveTrackSession] = {}
+        self.ended_session_debug: dict[str, dict] = {}
         self.known_users: dict[str, UserPolicy] = {}
         self.unsub_imap_listener = None
         self.lock = asyncio.Lock()
@@ -928,10 +938,27 @@ class GarminLiveTrackManager:
             raw={},
         )
 
+    @staticmethod
+    def _debug_snapshot(coord: LiveTrackSessionCoordinator | None) -> dict:
+        if coord is None:
+            return {}
+        return {
+            "page_status": coord.last_page_status,
+            "api_status": coord.last_api_status,
+            "trackpoints_source": coord.last_source_branch,
+            "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s,
+            "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord.last_trackpoint_fetch else None,
+            "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord.next_trackpoints_allowed_at else None,
+            "backoff_until": coord.backoff_until.isoformat() if coord.backoff_until else None,
+            "consecutive_http_failures": coord.consecutive_http_failures,
+            "last_http_status": coord.last_http_status,
+        }
+
     def _serialize_session(self, session: LiveTrackSession, *, include_token: bool) -> dict:
         coord = self.sessions.get(self._session_key(session.identity.session_id))
+        sid = self._session_key(session.identity.session_id)
         row = {
-            "session_id": self._session_key(session.identity.session_id),
+            "session_id": sid,
             "redacted_url": session.identity.redacted_url,
             "source": session.identity.source.value,
             "first_seen": session.first_seen.isoformat(),
@@ -951,6 +978,7 @@ class GarminLiveTrackManager:
             "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else None,
             "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else None,
             "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else None,
+            "debug": self._debug_snapshot(coord) if coord else dict(self.ended_session_debug.get(sid, {})),
         }
         if include_token:
             row["token"] = session.identity.token
@@ -1010,6 +1038,7 @@ class GarminLiveTrackManager:
                 expired.append(sid)
         for sid in expired:
             self.ended_sessions.pop(sid, None)
+            self.ended_session_debug.pop(sid, None)
         return len(expired)
 
     @staticmethod
@@ -1088,6 +1117,7 @@ class GarminLiveTrackManager:
 
     async def async_finalize_session(self, coord: LiveTrackSessionCoordinator, reason: str) -> None:
         sid = self._session_key(coord.session.identity.session_id)
+        self.ended_session_debug[sid] = self._debug_snapshot(coord)
         self.sessions.pop(sid, None)
         coord.session.end_reason = reason
         self.ended_sessions[sid] = coord.session
@@ -1107,6 +1137,7 @@ class GarminLiveTrackManager:
         coord.session.status = LiveTrackStatus.STOPPED
         coord.session.end_reason = reason
         coord.session.actual_end = datetime.now(UTC)
+        self.ended_session_debug[sid] = self._debug_snapshot(coord)
         self.ended_sessions[sid] = coord.session
         payload = self._session_event_payload(coord.session)
         payload["reason"] = reason
@@ -1117,6 +1148,7 @@ class GarminLiveTrackManager:
     async def async_clear_ended(self, older_than_hours=None):
         count = len(self.ended_sessions)
         self.ended_sessions.clear()
+        self.ended_session_debug.clear()
         await self.async_save_storage()
         self._notify_listeners()
         return count
@@ -1215,6 +1247,8 @@ class GarminLiveTrackManager:
                 if session is None:
                     continue
                 self.ended_sessions[session.identity.session_id] = session
+                if isinstance(row.get("debug"), dict):
+                    self.ended_session_debug[session.identity.session_id] = dict(row["debug"])
             self._prune_expired_ended_sessions()
         if restored:
             self._notify_listeners()
@@ -1486,6 +1520,7 @@ class GarminLiveTrackManager:
         ]
         for sid in ended_session_ids:
             self.ended_sessions.pop(sid, None)
+            self.ended_session_debug.pop(sid, None)
             changed = True
 
         removed_entities = self._remove_user_registry_entities(key)
