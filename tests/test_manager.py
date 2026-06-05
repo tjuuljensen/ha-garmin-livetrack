@@ -125,6 +125,79 @@ def test_activity_icon_mapping(activity, is_active, expected_icon):
     assert activity_icon(activity, is_active) == expected_icon
 
 
+def test_point_parser_accepts_garmin_metric_aliases(hass):
+    start = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
+    identity = LiveTrackIdentity(
+        "metric-aliases",
+        "token",
+        "https://livetrack.garmin.com/session/metric-aliases/token/token",
+        "redacted",
+        LiveTrackSource.SERVICE,
+    )
+    session = LiveTrackSession(identity, "Runner", "walking", start, None, None, start, None, None, None, 0, LiveTrackStatus.ACTIVE)
+    coord = LiveTrackSessionCoordinator(m, session)
+
+    point = coord._to_point(
+        {
+            "timestamp": "2026-01-01T10:05:00Z",
+            "fitnessPointData": {
+                "latitude": 55.67,
+                "longitude": 12.56,
+                "altitudeMeters": 25.5,
+                "speedMetersPerSecond": 1.2,
+                "totalDistanceMeters": 345.6,
+                "elapsedDurationSeconds": 300,
+                "heartRateInBeatsPerMinute": 123,
+                "powerInWatts": 180,
+                "cadenceRpm": 82,
+            },
+        }
+    )
+
+    assert point.latitude == 55.67
+    assert point.longitude == 12.56
+    assert point.altitude_m == 25.5
+    assert point.speed_mps == 1.2
+    assert point.distance_m == 345.6
+    assert point.duration_s == 300
+    assert point.heart_rate_bpm == 123
+    assert point.power_w == 180
+    assert point.cadence == 82
+
+
+def test_point_sequence_derives_missing_duration_and_distance(hass):
+    start = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
+    identity = LiveTrackIdentity(
+        "derived-metrics",
+        "token",
+        "https://livetrack.garmin.com/session/derived-metrics/token/token",
+        "redacted",
+        LiveTrackSource.SERVICE,
+    )
+    session = LiveTrackSession(identity, "Runner", "walking", start, None, None, start, None, None, None, 0, LiveTrackStatus.ACTIVE)
+    coord = LiveTrackSessionCoordinator(m, session)
+
+    point = coord._to_point_sequence(
+        [
+            {
+                "dateTime": "2026-01-01T10:00:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+            },
+            {
+                "dateTime": "2026-01-01T10:05:00Z",
+                "position": {"lat": 55.671, "lon": 12.561},
+            },
+        ],
+        None,
+    )
+
+    assert point.duration_s == 300
+    assert point.distance_m == pytest.approx(128.0, abs=5.0)
+    assert point.speed_mps == pytest.approx(point.distance_m / 300.0, rel=0.01)
+
+
 class SequenceClient:
     def __init__(self, fetches):
         self._fetches = list(fetches)

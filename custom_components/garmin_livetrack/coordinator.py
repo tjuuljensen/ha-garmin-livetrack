@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -238,7 +239,13 @@ class LiveTrackSessionCoordinator:
             self.session.expected_end = parse_garmin_datetime(fetch.session.get("end")) or self.session.expected_end
             self._update_trackpoint_frequency(fetch.session)
             self.session.trackpoint_count = fetch.trackpoint_count
-            self.session.last_point = self._to_point(fetch.last_trackpoint) or self.session.last_point
+            if fetch.trackpoints:
+                point = self._to_point_sequence(fetch.trackpoints, previous_last_point)
+            else:
+                point = self._to_point(fetch.last_trackpoint)
+                if point:
+                    self._enrich_point(point, previous_last_point)
+            self.session.last_point = point or self.session.last_point
 
             if self.session.trackpoint_count > 0:
                 self.session.status = LiveTrackStatus.ACTIVE
@@ -315,6 +322,7 @@ class LiveTrackSessionCoordinator:
 
         incremental_points = self._new_trackpoints(trackpoint_fetch.trackpoints, self.session.last_point)
         if incremental_points:
+            session_fetch.trackpoints = incremental_points
             session_fetch.trackpoint_count = current_count + len(incremental_points)
             session_fetch.last_trackpoint = incremental_points[-1]
             session_fetch.source["trackpoints_source"] = "trackpoints_common"
@@ -576,29 +584,167 @@ class LiveTrackSessionCoordinator:
             fixed = start.replace(tzinfo=UTC) if start.tzinfo is None else start
             return now - fixed
 
+    @staticmethod
+    def _pick_metric(*sources: dict, keys: tuple[str, ...]):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                value = source.get(key)
+                if value is not None:
+                    return value
+        return None
+
+    @staticmethod
+    def _coerce_metric(value):
+        if isinstance(value, dict):
+            for key in ("value", "amount", "seconds", "meters", "bpm", "watts"):
+                if value.get(key) is not None:
+                    return value.get(key)
+        return value
+
+    @classmethod
+    def _metric_float(cls, value) -> float | None:
+        value = cls._coerce_metric(value)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _metric_int(cls, value) -> int | None:
+        value = cls._metric_float(value)
+        if value is None:
+            return None
+        return int(round(value))
+
+    @classmethod
+    def _metric_seconds(cls, value) -> float | None:
+        seconds = cls._metric_float(value)
+        if seconds is None:
+            return None
+        # Some Garmin-adjacent payloads use milliseconds for elapsed durations.
+        if seconds > 10 * 24 * 3600:
+            seconds = seconds / 1000.0
+        return seconds
+
+    @staticmethod
+    def _haversine_m(a: LiveTrackPoint, b: LiveTrackPoint) -> float | None:
+        if a.latitude is None or a.longitude is None or b.latitude is None or b.longitude is None:
+            return None
+        radius_m = 6371000.0
+        lat1 = math.radians(float(a.latitude))
+        lat2 = math.radians(float(b.latitude))
+        dlat = lat2 - lat1
+        dlon = math.radians(float(b.longitude) - float(a.longitude))
+        h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        return 2 * radius_m * math.asin(math.sqrt(h))
+
+    def _enrich_point(self, point: LiveTrackPoint, previous_point: LiveTrackPoint | None) -> None:
+        if point.duration_s is None and self.session.start and point.timestamp:
+            start = self.session.start.replace(tzinfo=UTC) if self.session.start.tzinfo is None else self.session.start
+            timestamp = point.timestamp.replace(tzinfo=UTC) if point.timestamp.tzinfo is None else point.timestamp
+            point.duration_s = max(0.0, (timestamp - start).total_seconds())
+        if point.distance_m is None and previous_point is not None:
+            segment_m = self._haversine_m(previous_point, point)
+            if segment_m is not None:
+                point.distance_m = float(previous_point.distance_m or 0.0) + segment_m
+        if point.speed_mps is None and previous_point and previous_point.timestamp and point.timestamp:
+            segment_m = self._haversine_m(previous_point, point)
+            elapsed_s = (point.timestamp - previous_point.timestamp).total_seconds()
+            if segment_m is not None and elapsed_s > 0:
+                point.speed_mps = segment_m / elapsed_s
+
+    def _to_point_sequence(self, points: list[dict], previous_point: LiveTrackPoint | None) -> LiveTrackPoint | None:
+        last = previous_point
+        parsed = None
+        for raw in points:
+            point = self._to_point(raw)
+            if point is None:
+                continue
+            self._enrich_point(point, last)
+            last = point
+            parsed = point
+        return parsed
+
     def _to_point(self, raw: dict) -> LiveTrackPoint | None:
         if not raw:
             return None
         pos = raw.get("position") or {}
         fpd = raw.get("fitnessPointData") or {}
-        lat = pos.get("lat") if isinstance(pos, dict) else None
-        lon = pos.get("lon") if isinstance(pos, dict) else None
-        if lat is None:
-            lat = fpd.get("latitude")
-        if lon is None:
-            lon = fpd.get("longitude")
-        speed = raw.get("speed") if raw.get("speed") is not None else fpd.get("speed")
+        lat = self._pick_metric(
+            pos,
+            fpd,
+            raw,
+            keys=("lat", "latitude"),
+        )
+        lon = self._pick_metric(
+            pos,
+            fpd,
+            raw,
+            keys=("lon", "lng", "longitude"),
+        )
+        speed = self._pick_metric(
+            raw,
+            fpd,
+            keys=("speed", "speedMps", "speed_mps", "speedMetersPerSecond"),
+        )
+        distance = self._pick_metric(
+            raw,
+            fpd,
+            keys=(
+                "distance",
+                "distanceMeters",
+                "distanceInMeters",
+                "totalDistance",
+                "totalDistanceMeters",
+                "totalDistanceInMeters",
+                "cumulativeDistance",
+                "cumulativeDistanceMeters",
+            ),
+        )
+        duration = self._pick_metric(
+            raw,
+            fpd,
+            keys=(
+                "duration",
+                "durationSeconds",
+                "durationInSeconds",
+                "elapsedDuration",
+                "elapsedDurationSeconds",
+                "elapsedTime",
+                "elapsedTimeSeconds",
+                "totalDuration",
+                "totalDurationSeconds",
+                "timerDuration",
+                "timerDurationSeconds",
+            ),
+        )
+        altitude = self._pick_metric(
+            raw,
+            fpd,
+            keys=("altitude", "altitudeMeters", "elevation", "elevationMeters"),
+        )
+        heart_rate = self._pick_metric(
+            raw,
+            fpd,
+            keys=("heartRate", "heartRateBpm", "heart_rate_bpm", "heartRateInBeatsPerMinute"),
+        )
+        power = self._pick_metric(raw, fpd, keys=("power", "powerWatts", "powerInWatts"))
+        cadence = self._pick_metric(raw, fpd, keys=("cadence", "cadenceRpm", "stepsPerMinute"))
         return LiveTrackPoint(
-            timestamp=parse_garmin_datetime(raw.get("dateTime")),
-            latitude=float(lat) if lat is not None else None,
-            longitude=float(lon) if lon is not None else None,
-            altitude_m=raw.get("altitude") if raw.get("altitude") is not None else fpd.get("altitude"),
-            speed_mps=speed,
-            distance_m=raw.get("distance") if raw.get("distance") is not None else fpd.get("distance"),
-            duration_s=raw.get("duration") if raw.get("duration") is not None else fpd.get("duration"),
-            heart_rate_bpm=raw.get("heartRate") if raw.get("heartRate") is not None else fpd.get("heartRate"),
-            power_w=raw.get("power") if raw.get("power") is not None else fpd.get("power"),
-            cadence=raw.get("cadence") if raw.get("cadence") is not None else fpd.get("cadence"),
+            timestamp=parse_garmin_datetime(raw.get("dateTime") or raw.get("timestamp") or raw.get("time")),
+            latitude=self._metric_float(lat),
+            longitude=self._metric_float(lon),
+            altitude_m=self._metric_float(altitude),
+            speed_mps=self._metric_float(speed),
+            distance_m=self._metric_float(distance),
+            duration_s=self._metric_seconds(duration),
+            heart_rate_bpm=self._metric_int(heart_rate),
+            power_w=self._metric_int(power),
+            cadence=self._metric_float(cadence),
             event_types=extract_event_types(raw),
             raw={},
         )
