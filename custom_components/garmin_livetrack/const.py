@@ -26,6 +26,7 @@ CONF_USER_POLICIES='user_policies'
 CONF_ACTIVITY_FILTER='activity_filter'
 CONF_UPDATE_PROFILE='update_profile'
 CONF_UPDATE_INTERVAL='update_interval_seconds'
+CONF_USE_GARMIN_TRACKPOINT_FREQUENCY='use_garmin_trackpoint_frequency'
 CONF_INITIAL_TRACKPOINT_WAIT='initial_trackpoint_wait_minutes'
 CONF_MAX_RUNTIME_HOURS='max_runtime_hours'
 CONF_STALE_MINUTES='stale_minutes'
@@ -41,6 +42,7 @@ DEFAULT_ALLOWED_USERS=[]
 DEFAULT_ACTIVITY_FILTER='all'
 DEFAULT_UPDATE_PROFILE='conservative'
 DEFAULT_UPDATE_INTERVAL=timedelta(seconds=60)
+DEFAULT_USE_GARMIN_TRACKPOINT_FREQUENCY=False
 DEFAULT_INITIAL_TRACKPOINT_WAIT=timedelta(minutes=10)
 DEFAULT_MAX_RUNTIME_HOURS=23
 DEFAULT_STALE_MINUTES=15
@@ -50,7 +52,35 @@ DEFAULT_DEFER_STARTUP_POLL_SECONDS=60
 DEFAULT_EXPOSE_DEBUG_ATTRIBUTES=False
 DEFAULT_USER_AGENT='HomeAssistant-GarminLiveTrack/0.1.2'
 ACTIVITY_VALUES=['all','running','walking','cycling','strength','swimming','kayak','rowing','other']
-UPDATE_PROFILE_VALUES=['conservative','balanced','adaptive_fast']
+UPDATE_PROFILE_VALUES=['extended','conservative','balanced','adaptive','custom']
+UPDATE_PROFILE_DEFAULT_INTERVALS={
+    'extended': 600,
+    'conservative': 60,
+    'balanced': 30,
+    'adaptive': 15,
+    'custom': 60,
+}
+UPDATE_PROFILE_DEFAULT_USE_GARMIN_TRACKPOINT_FREQUENCY={
+    'extended': False,
+    'conservative': False,
+    'balanced': False,
+    'adaptive': True,
+    'custom': False,
+}
+UPDATE_PROFILE_DEFAULT_INITIAL_WAIT_MINUTES={
+    'extended': 20,
+    'conservative': 10,
+    'balanced': 10,
+    'adaptive': 10,
+    'custom': 10,
+}
+UPDATE_PROFILE_DEFAULT_STALE_MINUTES={
+    'extended': 30,
+    'conservative': 15,
+    'balanced': 15,
+    'adaptive': 15,
+    'custom': 15,
+}
 STORAGE_KEY='garmin_livetrack.storage'
 STORAGE_VERSION=1
 RUNTIME_DATA='runtime_data'

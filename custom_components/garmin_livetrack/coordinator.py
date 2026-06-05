@@ -21,6 +21,7 @@ from .const import (
     CONF_STRICT_USERS,
     CONF_UPDATE_PROFILE,
     CONF_UPDATE_INTERVAL,
+    CONF_USE_GARMIN_TRACKPOINT_FREQUENCY,
     CONF_USER_AGENT,
     CONF_USER_POLICIES,
     DEFAULT_USER_AGENT,
@@ -59,6 +60,12 @@ from .models import (
     stable_session_hash,
 )
 from .repairs import async_sync_shape_change_issue
+from .const import (
+    UPDATE_PROFILE_DEFAULT_INITIAL_WAIT_MINUTES,
+    UPDATE_PROFILE_DEFAULT_INTERVALS,
+    UPDATE_PROFILE_DEFAULT_STALE_MINUTES,
+    UPDATE_PROFILE_DEFAULT_USE_GARMIN_TRACKPOINT_FREQUENCY,
+)
 
 URL_RE = re.compile(r"https://livetrack\.garmin\.com/session/[^\"'>\s]+", re.IGNORECASE)
 _LOGGER = logging.getLogger(__name__)
@@ -152,9 +159,9 @@ class LiveTrackSessionCoordinator:
                 LiveTrackStatus.GARMIN_ERROR,
             }:
                 break
-            interval = int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))
+            interval = self.manager._effective_update_interval_seconds()
             if self.session.status == LiveTrackStatus.WAITING_FOR_TRACKPOINT:
-                initial_wait_minutes = int(self.manager.options.get("initial_trackpoint_wait_minutes", 10))
+                initial_wait_minutes = self.manager._effective_initial_trackpoint_wait_minutes()
                 within_initial = (datetime.now(UTC) - self.session.first_seen) < timedelta(minutes=initial_wait_minutes)
                 if within_initial:
                     interval = min(interval, 10)
@@ -229,8 +236,8 @@ class LiveTrackSessionCoordinator:
 
             if self.session.last_point and self.post_trackpoint_frequency_s:
                 self.next_trackpoints_allowed_at = self._compute_next_trackpoints_allowed_at(self.session.last_point.timestamp)
-            elif self.manager._adaptive_fast_enabled():
-                self.next_trackpoints_allowed_at = fetch.fetched_at + timedelta(seconds=max(2, interval if (interval := int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))) else 2))
+            elif self.manager._uses_garmin_trackpoint_frequency():
+                self.next_trackpoints_allowed_at = fetch.fetched_at + timedelta(seconds=max(2, self.manager._effective_update_interval_seconds()))
 
             if first_success and not self._logged_first_success:
                 self._logged_first_success = True
@@ -252,7 +259,7 @@ class LiveTrackSessionCoordinator:
                 return
             await self._handle_end_state(first_success=first_success)
         else:
-            stale_cutoff = timedelta(minutes=int(self.manager.options.get(CONF_STALE_MINUTES, 15)))
+            stale_cutoff = timedelta(minutes=self.manager._effective_stale_minutes())
             if self.session.last_success and (datetime.now(UTC) - self.session.last_success) > stale_cutoff:
                 self.session.status = LiveTrackStatus.STALE
                 self.end_reason = "fetch_stale"
@@ -268,7 +275,7 @@ class LiveTrackSessionCoordinator:
         )
 
     async def _fetch_runtime_state(self):
-        if not self.manager._adaptive_fast_enabled():
+        if not self.manager._uses_garmin_trackpoint_frequency():
             return await self.manager.client.fetch(self.session.identity)
         return await self._fetch_adaptive_state()
 
@@ -353,7 +360,7 @@ class LiveTrackSessionCoordinator:
             return None
         if self.post_trackpoint_frequency_s:
             return timestamp + timedelta(seconds=self.post_trackpoint_frequency_s + 2)
-        interval = int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))
+        interval = self.manager._effective_update_interval_seconds()
         return timestamp + timedelta(seconds=interval)
 
     def _point_to_fetch_payload(self, point: LiveTrackPoint | None) -> dict:
@@ -440,8 +447,8 @@ class LiveTrackSessionCoordinator:
         return fallback
 
     async def _handle_no_progress(self, now: datetime) -> bool:
-        stale_cutoff = timedelta(minutes=int(self.manager.options.get(CONF_STALE_MINUTES, 15)))
-        initial_wait = timedelta(minutes=int(self.manager.options.get("initial_trackpoint_wait_minutes", 10)))
+        stale_cutoff = timedelta(minutes=self.manager._effective_stale_minutes())
+        initial_wait = timedelta(minutes=self.manager._effective_initial_trackpoint_wait_minutes())
         finalization = timedelta(minutes=int(self.manager.options.get(CONF_FINALIZATION_MINUTES, 10)))
         current_count = self.session.trackpoint_count
         current_ts = self.session.last_point.timestamp if self.session.last_point else None
@@ -582,11 +589,53 @@ class GarminLiveTrackManager:
         value = str(self.options.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT).strip()
         return value or DEFAULT_USER_AGENT
 
-    def _adaptive_fast_enabled(self) -> bool:
-        return str(self.options.get(CONF_UPDATE_PROFILE, "conservative") or "conservative").strip().lower() == "adaptive_fast"
+    def _effective_update_profile(self) -> str:
+        profile = str(self.options.get(CONF_UPDATE_PROFILE, "conservative") or "conservative").strip().lower()
+        if profile not in UPDATE_PROFILE_DEFAULT_INTERVALS:
+            return "conservative"
+        return profile
+
+    def _uses_garmin_trackpoint_frequency(self) -> bool:
+        profile = self._effective_update_profile()
+        if profile == "custom":
+            return bool(self.options.get(CONF_USE_GARMIN_TRACKPOINT_FREQUENCY, False))
+        return bool(UPDATE_PROFILE_DEFAULT_USE_GARMIN_TRACKPOINT_FREQUENCY[profile])
+
+    def _effective_update_interval_seconds(self) -> int:
+        profile = self._effective_update_profile()
+        if profile == "custom":
+            try:
+                configured = int(self.options.get(CONF_UPDATE_INTERVAL, int(UPDATE_PROFILE_DEFAULT_INTERVALS["custom"])) or 0)
+            except (TypeError, ValueError):
+                configured = 0
+            if configured > 0:
+                return configured
+        return int(UPDATE_PROFILE_DEFAULT_INTERVALS[profile])
+
+    def _effective_initial_trackpoint_wait_minutes(self) -> int:
+        profile = self._effective_update_profile()
+        if profile == "custom":
+            try:
+                configured = int(self.options.get(CONF_INITIAL_TRACKPOINT_WAIT, UPDATE_PROFILE_DEFAULT_INITIAL_WAIT_MINUTES["custom"]) or 0)
+            except (TypeError, ValueError):
+                configured = 0
+            if configured > 0:
+                return configured
+        return int(UPDATE_PROFILE_DEFAULT_INITIAL_WAIT_MINUTES[profile])
+
+    def _effective_stale_minutes(self) -> int:
+        profile = self._effective_update_profile()
+        if profile == "custom":
+            try:
+                configured = int(self.options.get(CONF_STALE_MINUTES, UPDATE_PROFILE_DEFAULT_STALE_MINUTES["custom"]) or 0)
+            except (TypeError, ValueError):
+                configured = 0
+            if configured > 0:
+                return configured
+        return int(UPDATE_PROFILE_DEFAULT_STALE_MINUTES[profile])
 
     def _loop_wait_seconds(self, base_interval: int, next_trackpoints_allowed_at: datetime | None) -> int:
-        if not self._adaptive_fast_enabled():
+        if not self._uses_garmin_trackpoint_frequency():
             return max(30, base_interval)
         wait_seconds = max(5, min(base_interval, 15))
         if next_trackpoints_allowed_at is None:

@@ -193,6 +193,30 @@ async def test_configured_user_agent_is_applied_to_client(hass):
 
 
 @pytest.mark.asyncio
+async def test_update_profile_controls_effective_interval_when_no_override(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        DummyClient(),
+        DummyStore(),
+        {"update_profile": "balanced"},
+    )
+    await m.async_setup()
+    assert m._effective_update_interval_seconds() == 30
+
+    m.options["update_profile"] = "adaptive"
+    assert m._effective_update_interval_seconds() == 15
+
+    m.options["update_profile"] = "extended"
+    assert m._effective_update_interval_seconds() == 600
+
+    m.options["update_profile"] = "custom"
+    m.options["update_interval_seconds"] = 42
+    assert m._effective_update_interval_seconds() == 42
+    m.options["use_garmin_trackpoint_frequency"] = True
+    assert m._uses_garmin_trackpoint_frequency() is True
+
+
+@pytest.mark.asyncio
 async def test_storage_user_policy_migration_drops_notification_fields(hass):
     store = DummyStore()
     store.data = {
@@ -474,7 +498,7 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
 
 
 @pytest.mark.asyncio
-async def test_adaptive_fast_mode_skips_trackpoint_fetch_before_next_allowed_time(hass):
+async def test_adaptive_mode_skips_trackpoint_fetch_before_next_allowed_time(hass):
     base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     client = AdaptiveClient(
         session_fetches=[
@@ -523,7 +547,7 @@ async def test_adaptive_fast_mode_skips_trackpoint_fetch_before_next_allowed_tim
         hass,
         client,
         DummyStore(),
-        {"update_profile": "adaptive_fast", "update_interval_seconds": 60},
+        {"update_profile": "adaptive"},
     )
     await m.async_setup()
     identity = LiveTrackIdentity("adaptive-1", "token", "https://livetrack.garmin.com/session/adaptive-1/token/token", "redacted", LiveTrackSource.SERVICE)
@@ -597,7 +621,7 @@ async def test_point_received_event_fires_only_for_new_points(hass):
         hass,
         client,
         DummyStore(),
-        {"update_profile": "adaptive_fast", "update_interval_seconds": 60},
+        {"update_profile": "adaptive"},
     )
     await m.async_setup()
     identity = LiveTrackIdentity("adaptive-2", "token", "https://livetrack.garmin.com/session/adaptive-2/token/token", "redacted", LiveTrackSource.SERVICE)

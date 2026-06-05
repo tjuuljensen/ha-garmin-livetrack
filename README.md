@@ -98,16 +98,28 @@ Each known user can have overrides for:
 - allowed activities when using custom mode
 
 ### Update profiles
+- `Extended`
+  - default metadata polling interval is 10 minutes
+  - lowest Garmin pressure
 - `Conservative`
-  - uses the configured update interval
+  - default metadata polling interval is 60 seconds
   - safest for Garmin and long activities
 - `Balanced`
-  - keeps the same overall fetch strategy
-  - intended for more responsive dashboards when you lower the update interval
-- `Adaptive fast`
+  - default metadata polling interval is 30 seconds
+  - intended for more responsive dashboards
+- `Adaptive`
+  - default metadata polling interval is 15 seconds
   - still fetches session metadata normally
   - uses Garmin `postTrackPointFrequency` when available so trackpoint fetches are not attempted before Garmin is likely to have published a new point
-  - falls back to the configured update interval when Garmin does not provide a usable frequency
+  - falls back to the effective metadata interval when Garmin does not provide a usable frequency
+- `Custom`
+  - opens the advanced settings step automatically
+  - allows explicit control of metadata interval, Garmin trackpoint publish-frequency gating, and lifecycle timing values
+
+Advanced settings can also be opened manually from the normal options flow. The advanced step contains:
+- `HTTP User-Agent`
+- `Expose debug attributes`
+- custom low-level timing fields when the selected profile is `Custom`
 
 ### User matching
 User policy matching is case-insensitive internally, while the original Garmin display name is preserved for display and diagnostics.
@@ -318,9 +330,11 @@ Sources include:
 - nested arrays containing Garmin point-like dicts
 
 ### Polling modes
-- `Conservative`: safest for Garmin and long activities.
-- `Balanced`: better dashboard responsiveness when paired with a lower update interval.
-- `Adaptive fast`: fastest useful updates without polling trackpoints faster than Garmin publishes them.
+- `Extended`: lowest-pressure preset for sparse or long-running sessions.
+- `Conservative`: safest general-purpose preset.
+- `Balanced`: better dashboard responsiveness.
+- `Adaptive`: fastest useful updates without polling trackpoints faster than Garmin publishes them.
+- `Custom`: manual low-level tuning.
 
 ### Shape-change signal
 The integration watches for repeated anomalies such as:
