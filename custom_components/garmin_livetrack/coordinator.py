@@ -1283,16 +1283,22 @@ class GarminLiveTrackManager:
         ]
         removed = 0
         for entity_domain, unique_id in lookup_specs:
-            entity_id = registry.async_get_entity_id(entity_domain, DOMAIN, unique_id)
+            try:
+                entity_id = registry.async_get_entity_id(entity_domain, DOMAIN, unique_id)
+            except AttributeError:
+                entity_id = None
             if entity_id:
                 registry.async_remove(entity_id)
                 removed += 1
 
-        device_registry = dr.async_get(self.hass)
-        target_identifier = (DOMAIN, f"user:{hash_part}")
-        for device in list(device_registry.devices.values()):
-            if target_identifier in device.identifiers:
-                device_registry.async_remove_device(device.id)
+        try:
+            device_registry = dr.async_get(self.hass)
+            target_identifier = (DOMAIN, f"user:{hash_part}")
+            for device in list(device_registry.devices.values()):
+                if target_identifier in device.identifiers:
+                    device_registry.async_remove_device(device.id)
+        except AttributeError:
+            pass
         return removed
 
     async def async_remove_user(self, user: str) -> bool:
