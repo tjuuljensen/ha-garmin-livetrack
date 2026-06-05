@@ -128,3 +128,38 @@ async def test_advanced_profile_step_defaults_to_existing_when_advanced_settings
 
     assert result["type"] == "form"
     assert result["step_id"] == "advanced_profile"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_edit_user_takes_priority_over_advanced_profile(hass):
+    class _FakeConfigEntry:
+        data = {}
+        options = {
+            "update_profile": "custom",
+            "allowed_users": ["Runner"],
+            "user_policies": {
+                "Runner": {
+                    "name": "Runner",
+                    "enabled": True,
+                    "mode": "normal",
+                }
+            },
+        }
+
+    flow = GarminLiveTrackOptionsFlow(_FakeConfigEntry())
+    flow.hass = hass
+
+    result = await flow.async_step_init(
+        {
+            "listen_to_imap_events": True,
+            "strict_users": False,
+            "accept_first_seen_users": False,
+            "allowed_users": "Runner",
+            "activity_filter": "all",
+            "update_profile": "custom",
+            "edit_user": "Runner",
+        }
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user_policy"

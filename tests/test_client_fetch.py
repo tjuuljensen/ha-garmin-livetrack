@@ -140,3 +140,37 @@ async def test_fetch_full_falls_back_to_hydration_when_trackpoint_endpoint_fails
     assert result.trackpoint_count == 1
     assert result.source["trackpoints_source"] == "hydration"
     assert any(err.code == "trackpoints_http_error" for err in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_fetch_trackpoints_retries_once_after_403_with_refreshed_csrf():
+    session = RecordingSession(
+        [
+            FakeResponse(status=200, text_data='<meta name="csrf-token" content="csrf-1">'),
+            FakeResponse(status=403, json_data={}),
+            FakeResponse(status=200, text_data='<meta name="csrf-token" content="csrf-2">'),
+            FakeResponse(
+                status=200,
+                json_data={
+                    "trackPoints": [
+                        {"dateTime": "2026-01-01T00:01:00Z", "position": {"lat": 55.67, "lon": 12.56}}
+                    ]
+                },
+            ),
+        ]
+    )
+    client = GarminLiveTrackClient(hass=None, session=session)
+    identity = LiveTrackIdentity(
+        session_id="abc",
+        token="secret",
+        canonical_url="https://livetrack.garmin.com/session/abc/token/secret",
+        redacted_url="https://livetrack.garmin.com/session/abc/token/sec...ret",
+        source=LiveTrackSource.SERVICE,
+    )
+
+    result = await client.fetch_trackpoints(identity)
+
+    assert result.ok is True
+    assert len(session.calls) == 4
+    assert session.calls[1]["headers"]["Livetrack-Csrf-Token"] == "csrf-1"
+    assert session.calls[3]["headers"]["Livetrack-Csrf-Token"] == "csrf-2"
