@@ -239,8 +239,9 @@ class LiveTrackSessionCoordinator:
             self.session.expected_end = parse_garmin_datetime(fetch.session.get("end")) or self.session.expected_end
             self._update_trackpoint_frequency(fetch.session)
             self.session.trackpoint_count = fetch.trackpoint_count
-            if fetch.trackpoints:
-                point = self._to_point_sequence(fetch.trackpoints, previous_last_point)
+            trackpoints = getattr(fetch, "trackpoints", None)
+            if trackpoints:
+                point = self._to_point_sequence(trackpoints, previous_last_point)
             else:
                 point = self._to_point(fetch.last_trackpoint)
                 if point:
