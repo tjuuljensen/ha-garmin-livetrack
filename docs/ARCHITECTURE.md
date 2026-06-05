@@ -171,14 +171,62 @@ This includes:
 - hydration or app-router payloads
 - nested point-like arrays
 
-### Adaptive fast mode
-When the update profile is `adaptive_fast`, the coordinator:
+### Adaptive mode
+When the update profile is `adaptive`, the coordinator:
 - tracks Garmin `postTrackPointFrequency`
 - computes `next_trackpoints_allowed_at`
 - skips incremental trackpoint requests until Garmin is likely to have published a new point
-- falls back to the configured update interval when Garmin does not provide a usable publishing frequency
+- falls back to the effective metadata interval when Garmin does not provide a usable publishing frequency
 
 This mode still preserves the existing lifecycle layer for stale/finalization/end inference.
+
+
+## Normalization Model
+### Activity normalization
+Garmin is treated as the source of truth for activity names. The integration preserves the raw Garmin value as `activity_type_raw` and computes a normalized canonical value as `activity_type`.
+
+Normalization rules:
+- trim whitespace
+- lowercase values
+- replace spaces and dashes with underscores
+- map known aliases through `ACTIVITY_ALIASES`
+- preserve unknown values unchanged after normalization cleanup
+
+Examples:
+- `Trail Running` -> `running`
+- `Mountain Biking` -> `cycling`
+- `kayaking` -> `kayak`
+- `adventure_racing` -> `adventure_racing`
+
+Unknown activities are never rejected just because they are unknown. They remain visible in entities, events, and diagnostics and fall back to a generic icon.
+
+### Icon mapping
+Icon selection is data-driven through `ACTIVITY_ICONS`. Active and inactive icon variants are chosen from the normalized activity value rather than from ad hoc branching logic.
+
+### Metric normalization
+The integration keeps Garmin raw point fields where useful and also derives normalized metrics for entity attributes and events:
+- `speed_kmh`
+- `pace_min_km`
+- `distance_km`
+- `duration_hms`
+- `has_location`
+
+This keeps automation matching and dashboard presentation stable while preserving the underlying Garmin values for diagnostics.
+
+
+### Transport backoff
+Transport protection is per session and transient. Each coordinator can track:
+- `backoff_until`
+- `consecutive_http_failures`
+- `last_http_status`
+
+Current backoff policy:
+- `429`: exponential cooldown starting at 2 minutes, capped at 15 minutes
+- `5xx` and retryable request failures: exponential cooldown starting at 30 seconds, capped at 10 minutes
+- `403` after the CSRF retry path still fails: moderate cooldown
+- successful fetch: clear backoff state
+
+The backoff model delays Garmin requests, but it does not suspend lifecycle progression. No-progress, stale, ending, and finalization logic remain the controlling lifecycle layer.
 
 ## Diagnostics And Repairs
 ### Diagnostics
@@ -235,3 +283,15 @@ The following decisions are currently intentional and closed:
 ### Documentation
 - keep README and TODO aligned with runtime behavior
 - keep cleanup guidance framed around generic entity-registry cleanup rather than one specific prior setup
+
+## Release Model
+HACS-facing releases should map to explicit Git tags and GitHub releases. The repository should not treat arbitrary `main` commits as published release artifacts.
+
+Release checklist:
+1. bump `manifest.json`, `pyproject.toml`, and the default User-Agent version together
+2. update README if operator-facing behavior changed
+3. create tag `vX.Y.Z`
+4. publish a GitHub release from that tag
+5. let HACS track the release
+
+This keeps installation state, diagnostics, and support discussions aligned to a concrete published artifact.

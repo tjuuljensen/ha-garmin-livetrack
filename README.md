@@ -5,7 +5,7 @@ Home Assistant custom integration for Garmin LiveTrack session monitoring.
 The integration accepts Garmin LiveTrack URLs from Home Assistant services and IMAP events, tracks one or more sessions independently, restores recoverable sessions after restart, exposes stable user devices and global health entities, and keeps Garmin tokens out of normal logs, diagnostics, and non-storage state.
 
 ## Status
-Current version: `0.1.2`
+Current version: `0.2.0`
 
 Implemented:
 - UI setup through Home Assistant config entries
@@ -13,7 +13,8 @@ Implemented:
 - IMAP event ingestion
 - independent concurrent session tracking
 - layered Garmin fetch strategy with a dedicated incremental trackpoint endpoint
-- adaptive fast polling using Garmin `postTrackPointFrequency` when enabled
+- adaptive polling using Garmin `postTrackPointFrequency` when enabled
+- per-session transport backoff for Garmin 429, 5xx, and retryable request failures
 - per-user stable entities and device trackers
 - restart recovery
 - configurable HTTP User-Agent
@@ -21,8 +22,8 @@ Implemented:
 - repair signal for suspected Garmin response-shape changes
 
 Remaining work is mainly:
-- test coverage expansion
-- a few remaining lifecycle edge cases
+- more real-world runtime validation across different Garmin activity types
+- a few remaining lifecycle edge-case tests
 - entity-registry cleanup polish
 
 ## Important Warning
@@ -35,6 +36,8 @@ Garmin LiveTrack is not a documented public API. Garmin can change the public pa
 3. Install `Garmin LiveTrack`.
 4. Restart Home Assistant.
 5. Add the integration from `Settings -> Devices & Services`.
+
+HACS should follow tagged GitHub releases for normal use. Branch state can move ahead of the latest published release.
 
 ### Manual installation
 1. Copy `custom_components/garmin_livetrack` into `/config/custom_components/`.
@@ -73,22 +76,26 @@ The integration uses one config entry with:
 - per-user policy overrides
 - runtime session storage for recovery
 
-### Global options
+### Main options
 - `Listen for IMAP events`
-- `HTTP User-Agent`
 - `Require configured users`
 - `Accept first event from unknown users`
 - `Configured users`
 - `Default activity filter`
 - `Update profile`
-- `Update interval (seconds)`
+
+### Advanced settings
+Advanced settings are shown only through the `Advanced` profile path. They include:
+- `HTTP User-Agent`
+- `Expose debug attributes`
+- `Metadata interval (seconds)`
+- `Use Garmin trackpoint publish frequency`
 - `Initial trackpoint wait (minutes)`
 - `Maximum runtime (hours)`
 - `Stale timeout (minutes)`
 - `Finalization window (minutes)`
 - `Retain ended sessions (hours)`
 - `Startup poll defer (seconds)`
-- `Expose debug attributes`
 
 ### Per-user policy options
 Each known user can have overrides for:
@@ -113,18 +120,37 @@ Each known user can have overrides for:
   - uses Garmin `postTrackPointFrequency` when available so trackpoint fetches are not attempted before Garmin is likely to have published a new point
   - falls back to the effective metadata interval when Garmin does not provide a usable frequency
 - `Advanced`
-  - opens the advanced settings step automatically
-  - allows explicit control of metadata interval, Garmin trackpoint publish-frequency gating, and lifecycle timing values
+  - opens an advanced preset step first
+  - lets you choose `Existing settings`, `Extended`, `Conservative`, `Balanced`, or `Adaptive` as the baseline
+  - then opens the advanced settings step for low-level overrides
 
-The advanced step contains:
+The advanced settings step contains:
 - `HTTP User-Agent`
 - `Expose debug attributes`
-- low-level timing fields when the selected profile is `Advanced`
+- metadata interval override
+- Garmin trackpoint publish-frequency gating override
+- lifecycle timing fields
 
 ### User matching
 User policy matching is case-insensitive internally, while the original Garmin display name is preserved for display and diagnostics.
 
 Garmin identity is based on Garmin `userDisplayName`. It is a user-facing string and not a guaranteed immutable account identifier.
+
+### Activity normalization
+The integration preserves both Garmin's raw activity label and a normalized canonical value.
+
+Examples:
+- `Trail Running` -> `running`
+- `kayaking` -> `kayak`
+- `Open Water Swimming` -> `swimming`
+
+Rules:
+- the raw Garmin value is kept as `activity_type_raw`
+- the normalized value is exposed as `activity_type`
+- unknown Garmin activity names are preserved rather than rejected
+- icon selection is driven by the normalized value
+
+This keeps entity state, events, and diagnostics stable without hiding Garmin-specific values.
 
 ## Notifications
 This integration does not send notifications directly.
@@ -140,7 +166,7 @@ An example package is available at:
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
-- `HomeAssistant-GarminLiveTrack/0.1.2`
+- `HomeAssistant-GarminLiveTrack/0.2.0`
 
 Typical reasons to change it:
 - Garmin behaves differently for different clients
@@ -155,7 +181,7 @@ Recommended approach:
 
 Common examples:
 - integration default:
-  - `HomeAssistant-GarminLiveTrack/0.1.2`
+  - `HomeAssistant-GarminLiveTrack/0.2.0`
 - Windows Chrome:
   - `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36`
 - macOS Safari:
@@ -336,6 +362,14 @@ Sources include:
 - `Adaptive`: fastest useful updates without polling trackpoints faster than Garmin publishes them.
 - `Advanced`: manual low-level tuning.
 
+### Transport backoff
+The coordinator applies a bounded per-session cooldown when Garmin or the network is failing:
+- `429` starts at 2 minutes and backs off up to 15 minutes
+- `5xx` and retryable request failures start at 30 seconds and back off up to 10 minutes
+- successful fetches clear the backoff state
+
+Backoff delays Garmin requests, but it does not disable lifecycle handling. Stale, ending, and finalization logic continue to run while the session is cooling down.
+
 ### Shape-change signal
 The integration watches for repeated anomalies such as:
 - missing session
@@ -381,24 +415,19 @@ Current stale handling includes:
 
 ## Tuning
 ### `update_interval_seconds`
-Default is 60 seconds. That is intentionally conservative and roughly aligned with reasonable browser-like polling behavior.
-
-Guidance:
-- `60` for conservative/default use
-- `30` for higher responsiveness if you accept more polling
-- avoid lower values unless you have a concrete reason
+Available only in the `Advanced` profile path. Use this when the built-in presets are not a good fit.
 
 ### `initial_trackpoint_wait_minutes`
-Controls how long the integration waits when Garmin has created the session but has not exposed trackpoints yet.
+Available only in the `Advanced` profile path. Controls how long the integration waits when Garmin has created the session but has not exposed trackpoints yet.
 
 ### `stale_minutes`
-Controls how long the integration tolerates no useful progress before marking a session stale.
+Available only in the `Advanced` profile path. Controls how long the integration tolerates no useful progress before marking a session stale.
 
 ### `finalization_minutes`
-Controls how long inferred-ending sessions remain active to capture late final data.
+Available only in the `Advanced` profile path. Controls how long inferred-ending sessions remain active to capture late final data.
 
 ### `defer_startup_poll_seconds`
-Delays restored pollers at startup to reduce startup pressure.
+Available only in the `Advanced` profile path. Delays restored pollers at startup to reduce startup pressure.
 
 ### `Expose debug attributes`
 When disabled, troubleshooting-only attributes stay off the normal status-sensor surface.
@@ -480,6 +509,18 @@ Check:
 - browser behavior with the same LiveTrack
 
 If the problem repeats, Home Assistant should also raise a Garmin LiveTrack repair issue indicating that the Garmin response shape may have changed.
+
+
+## Release Model
+Stable HACS installs should follow tagged GitHub releases rather than arbitrary branch state.
+
+Release policy:
+- bump the integration version in `manifest.json`, `pyproject.toml`, and the default User-Agent
+- create a Git tag in the form `vX.Y.Z`
+- publish a matching GitHub release from that tag
+- let HACS consume the tagged release
+
+Normal development can continue on branches and `main`, but published HACS versions should always map to an explicit tag and GitHub release.
 
 ## Local Testing
 Run the full repo pytest suite in a Python 3.12 environment aligned with CI:
