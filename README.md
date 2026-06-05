@@ -112,14 +112,14 @@ Each known user can have overrides for:
   - still fetches session metadata normally
   - uses Garmin `postTrackPointFrequency` when available so trackpoint fetches are not attempted before Garmin is likely to have published a new point
   - falls back to the effective metadata interval when Garmin does not provide a usable frequency
-- `Custom`
+- `Advanced`
   - opens the advanced settings step automatically
   - allows explicit control of metadata interval, Garmin trackpoint publish-frequency gating, and lifecycle timing values
 
-Advanced settings can also be opened manually from the normal options flow. The advanced step contains:
+The advanced step contains:
 - `HTTP User-Agent`
 - `Expose debug attributes`
-- custom low-level timing fields when the selected profile is `Custom`
+- low-level timing fields when the selected profile is `Advanced`
 
 ### User matching
 User policy matching is case-insensitive internally, while the original Garmin display name is preserved for display and diagnostics.
@@ -334,7 +334,7 @@ Sources include:
 - `Conservative`: safest general-purpose preset.
 - `Balanced`: better dashboard responsiveness.
 - `Adaptive`: fastest useful updates without polling trackpoints faster than Garmin publishes them.
-- `Custom`: manual low-level tuning.
+- `Advanced`: manual low-level tuning.
 
 ### Shape-change signal
 The integration watches for repeated anomalies such as:

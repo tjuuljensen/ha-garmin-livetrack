@@ -18,7 +18,6 @@ ACTIVITY_ALIASES = {
     "cycling": "cycling",
     "road_biking": "cycling",
     "mountain_biking": "cycling",
-    "indoor_cycling": "cycling",
     "walk": "walking",
     "walking": "walking",
     "hike": "walking",
@@ -36,7 +35,6 @@ ACTIVITY_ALIASES = {
     "canoeing": "kayak",
     "paddle_sports": "kayak",
     "rowing": "rowing",
-    "indoor_rowing": "rowing",
 }
 
 

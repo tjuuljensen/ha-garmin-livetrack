@@ -45,7 +45,7 @@ from .const import (
 
 CONF_EDIT_USER = "edit_user"
 CONF_USER_ACTIVITY_MODE = "user_activity_mode"
-CONF_CONFIGURE_ADVANCED = "configure_advanced"
+CONF_ADVANCED_BASELINE = "advanced_profile_defaults"
 
 ERROR_INVALID_ALLOWED_ACTIVITIES = "invalid_allowed_activities"
 ERROR_INVALID_USER_AGENT = "invalid_user_agent"
@@ -88,14 +88,12 @@ def _global_schema(
                     selector.SelectOptionDict(value="conservative", label="Conservative"),
                     selector.SelectOptionDict(value="balanced", label="Balanced"),
                     selector.SelectOptionDict(value="adaptive", label="Adaptive"),
-                    selector.SelectOptionDict(value="custom", label="Custom"),
+                    selector.SelectOptionDict(value="custom", label="Advanced"),
                 ],
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         ),
     }
-    if include_users:
-        fields[vol.Optional(CONF_CONFIGURE_ADVANCED, default=False)] = bool
     if known_users:
         fields[vol.Optional(CONF_EDIT_USER)] = selector.SelectSelector(
             selector.SelectSelectorConfig(
@@ -160,6 +158,37 @@ def _advanced_schema(defaults: dict, *, is_custom: bool) -> vol.Schema:
     return vol.Schema(fields)
 
 
+def _advanced_profile_schema(defaults: dict) -> vol.Schema:
+    options = []
+    if defaults.get("has_existing_advanced"):
+        options.append(selector.SelectOptionDict(value="existing", label="Existing settings"))
+    options.extend(
+        [
+            selector.SelectOptionDict(value="extended", label="Extended"),
+            selector.SelectOptionDict(value="conservative", label="Conservative"),
+            selector.SelectOptionDict(value="balanced", label="Balanced"),
+            selector.SelectOptionDict(value="adaptive", label="Adaptive"),
+        ]
+    )
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_ADVANCED_BASELINE,
+                default=defaults.get(CONF_ADVANCED_BASELINE, "conservative"),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=options,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_EXPOSE_DEBUG_ATTRIBUTES,
+                default=defaults.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES),
+            ): bool,
+        }
+    )
+
+
 def _user_policy_schema(defaults: dict) -> vol.Schema:
     allowed_activities = defaults.get("allowed_activities", []) or []
     activity_mode = "custom" if allowed_activities else "inherit_global"
@@ -196,7 +225,6 @@ def _normalize(inp: dict, *, include_users: bool) -> dict:
         profile = DEFAULT_UPDATE_PROFILE
     out[CONF_UPDATE_PROFILE] = profile
     out.pop(CONF_EDIT_USER, None)
-    out.pop(CONF_CONFIGURE_ADVANCED, None)
     return out
 
 
@@ -229,6 +257,16 @@ def _normalize_advanced(inp: dict, *, is_custom: bool) -> dict:
             CONF_DEFER_STARTUP_POLL_SECONDS,
         ):
             out.pop(key, None)
+    return out
+
+
+def _normalize_advanced_profile(inp: dict) -> dict:
+    out = dict(inp)
+    baseline = str(out.get(CONF_ADVANCED_BASELINE, "conservative") or "conservative").strip().lower()
+    if baseline not in {"existing", "extended", "conservative", "balanced", "adaptive"}:
+        baseline = "conservative"
+    out[CONF_ADVANCED_BASELINE] = baseline
+    out[CONF_EXPOSE_DEBUG_ATTRIBUTES] = bool(out.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES))
     return out
 
 
@@ -302,6 +340,16 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
         user_names.update(str(name).strip() for name in policies.keys() if str(name).strip())
         return sorted(user_names, key=str.lower)
 
+    def _has_existing_advanced_settings(self, defaults: dict) -> bool:
+        return bool(
+            defaults.get(CONF_UPDATE_PROFILE) == "custom"
+            or defaults.get(CONF_ADVANCED_BASELINE)
+            or defaults.get(CONF_UPDATE_INTERVAL) is not None
+            or defaults.get(CONF_USE_GARMIN_TRACKPOINT_FREQUENCY) is not None
+            or defaults.get(CONF_INITIAL_TRACKPOINT_WAIT) is not None
+            or defaults.get(CONF_STALE_MINUTES) is not None
+        )
+
     async def async_step_init(self, user_input=None):
         defaults = {**self._config_entry.data, **self._config_entry.options}
         known_users = self._known_users()
@@ -311,11 +359,10 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
                 normalized = _normalize(user_input, include_users=True)
                 selected_user = str(user_input.get(CONF_EDIT_USER, "") or "").strip()
                 merged = {**defaults, **normalized}
-                should_advance = bool(user_input.get(CONF_CONFIGURE_ADVANCED)) or normalized.get(CONF_UPDATE_PROFILE) == "custom"
-                if should_advance:
+                if normalized.get(CONF_UPDATE_PROFILE) == "custom":
                     self._pending_options = merged
                     self._selected_user = selected_user or None
-                    return await self.async_step_advanced()
+                    return await self.async_step_advanced_profile()
                 if selected_user:
                     self._pending_options = merged
                     self._selected_user = selected_user
@@ -336,9 +383,57 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
         )
 
+    async def async_step_advanced_profile(self, user_input=None):
+        defaults = self._pending_options or {**self._config_entry.data, **self._config_entry.options}
+        profile_defaults = {
+            **defaults,
+            "has_existing_advanced": self._has_existing_advanced_settings(defaults),
+        }
+        if profile_defaults["has_existing_advanced"]:
+            profile_defaults[CONF_ADVANCED_BASELINE] = defaults.get(CONF_ADVANCED_BASELINE, "existing") or "existing"
+        errors = {}
+        if user_input is not None:
+            try:
+                normalized = _normalize_advanced_profile(user_input)
+                merged = {**defaults, **normalized}
+                self._pending_options = merged
+                return await self.async_step_advanced()
+            except vol.Invalid as err:
+                errors["base"] = _error_key(err)
+        return self.async_show_form(
+            step_id="advanced_profile",
+            data_schema=self.add_suggested_values_to_schema(
+                _advanced_profile_schema(profile_defaults),
+                {},
+            ),
+            errors=errors,
+        )
+
     async def async_step_advanced(self, user_input=None):
         defaults = self._pending_options or {**self._config_entry.data, **self._config_entry.options}
         is_custom = str(defaults.get(CONF_UPDATE_PROFILE, DEFAULT_UPDATE_PROFILE) or DEFAULT_UPDATE_PROFILE).strip().lower() == "custom"
+        saved_baseline = str((self._config_entry.options or {}).get(CONF_ADVANCED_BASELINE, "conservative") or "conservative").strip().lower()
+        selected_baseline = str(defaults.get(CONF_ADVANCED_BASELINE, saved_baseline) or saved_baseline).strip().lower()
+        baseline_defaults = {
+            CONF_UPDATE_INTERVAL: {"extended": 600, "conservative": 60, "balanced": 30, "adaptive": 15}.get(selected_baseline, 60),
+            CONF_USE_GARMIN_TRACKPOINT_FREQUENCY: selected_baseline == "adaptive",
+            CONF_INITIAL_TRACKPOINT_WAIT: {"extended": 20, "conservative": 10, "balanced": 10, "adaptive": 10}.get(selected_baseline, 10),
+            CONF_STALE_MINUTES: {"extended": 30, "conservative": 15, "balanced": 15, "adaptive": 15}.get(selected_baseline, 15),
+        }
+        effective_defaults = dict(defaults)
+        if is_custom:
+            if selected_baseline == "existing":
+                effective_defaults.setdefault(CONF_UPDATE_INTERVAL, 60)
+                effective_defaults.setdefault(CONF_USE_GARMIN_TRACKPOINT_FREQUENCY, False)
+                effective_defaults.setdefault(CONF_INITIAL_TRACKPOINT_WAIT, 10)
+                effective_defaults.setdefault(CONF_STALE_MINUTES, 15)
+            elif selected_baseline != saved_baseline:
+                effective_defaults.update(baseline_defaults)
+            else:
+                effective_defaults.setdefault(CONF_UPDATE_INTERVAL, baseline_defaults[CONF_UPDATE_INTERVAL])
+                effective_defaults.setdefault(CONF_USE_GARMIN_TRACKPOINT_FREQUENCY, baseline_defaults[CONF_USE_GARMIN_TRACKPOINT_FREQUENCY])
+                effective_defaults.setdefault(CONF_INITIAL_TRACKPOINT_WAIT, baseline_defaults[CONF_INITIAL_TRACKPOINT_WAIT])
+                effective_defaults.setdefault(CONF_STALE_MINUTES, baseline_defaults[CONF_STALE_MINUTES])
         errors = {}
         if user_input is not None:
             try:
@@ -353,9 +448,9 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="advanced",
             data_schema=self.add_suggested_values_to_schema(
-                _advanced_schema(defaults, is_custom=is_custom),
+                _advanced_schema(effective_defaults, is_custom=is_custom),
                 {
-                    CONF_USER_AGENT: defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
+                    CONF_USER_AGENT: effective_defaults.get(CONF_USER_AGENT, DEFAULT_USER_AGENT),
                 },
             ),
             errors=errors,

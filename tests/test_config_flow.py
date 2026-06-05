@@ -20,17 +20,15 @@ def test_normalize_empty_user_agent_reverts_to_default():
     assert out["user_agent"] == DEFAULT_USER_AGENT
 
 
-def test_normalize_keeps_profile_and_drops_advanced_flag():
+def test_normalize_keeps_profile():
     out = _normalize(
         {
             "allowed_users": "",
             "update_profile": "adaptive",
-            "configure_advanced": True,
         },
         include_users=True,
     )
     assert out["update_profile"] == "adaptive"
-    assert "configure_advanced" not in out
 
 
 @pytest.mark.asyncio
@@ -52,7 +50,6 @@ async def test_options_flow_without_advanced_preserves_existing_user_agent(hass)
             "allowed_users": "",
             "activity_filter": "all",
             "update_profile": "conservative",
-            "configure_advanced": False,
         }
     )
 
@@ -78,19 +75,57 @@ async def test_advanced_step_missing_user_agent_reverts_to_default(hass):
             "accept_first_seen_users": False,
             "allowed_users": "",
             "activity_filter": "all",
-            "update_profile": "conservative",
-            "configure_advanced": True,
+            "update_profile": "custom",
         }
     )
 
     assert first["type"] == "form"
-    assert first["step_id"] == "advanced"
+    assert first["step_id"] == "advanced_profile"
+
+    second = await flow.async_step_advanced_profile(
+        {
+            "advanced_profile_defaults": "conservative",
+            "expose_debug_attributes": False,
+        }
+    )
+
+    assert second["type"] == "form"
+    assert second["step_id"] == "advanced"
 
     result = await flow.async_step_advanced(
         {
             "expose_debug_attributes": False,
+            "update_interval_seconds": 60,
+            "use_garmin_trackpoint_frequency": False,
+            "initial_trackpoint_wait_minutes": 10,
+            "max_runtime_hours": 12,
+            "stale_minutes": 10,
+            "finalization_minutes": 5,
+            "retain_ended_hours": 6,
+            "defer_startup_poll_seconds": 0,
         }
     )
 
     assert result["type"] == "create_entry"
     assert result["data"]["user_agent"] == DEFAULT_USER_AGENT
+
+
+@pytest.mark.asyncio
+async def test_advanced_profile_defaults_to_existing_settings_when_present(hass):
+    class _FakeConfigEntry:
+        data = {}
+        options = {
+            "update_profile": "custom",
+            "advanced_profile_defaults": "adaptive",
+            "update_interval_seconds": 42,
+            "use_garmin_trackpoint_frequency": True,
+        }
+
+    flow = GarminLiveTrackOptionsFlow(_FakeConfigEntry())
+    flow.hass = hass
+    flow._pending_options = {"update_profile": "custom", **_FakeConfigEntry.options}
+
+    result = await flow.async_step_advanced_profile()
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "advanced_profile"
