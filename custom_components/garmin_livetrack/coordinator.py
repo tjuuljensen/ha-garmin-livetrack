@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Callable
 
 from homeassistant.core import Event, SupportsResponse, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -1260,17 +1261,88 @@ class GarminLiveTrackManager:
         self._notify_listeners()
         return True
 
+    def _remove_user_policy_option(self, key: str) -> bool:
+        payload = dict(self.options.get(CONF_USER_POLICIES, {}) or {})
+        changed = False
+        for candidate in list(payload):
+            if self._user_key(candidate) == key:
+                payload.pop(candidate, None)
+                changed = True
+        if changed:
+            self.options[CONF_USER_POLICIES] = payload
+        return changed
+
+    def _remove_user_registry_entities(self, key: str) -> int:
+        registry = er.async_get(self.hass)
+        hash_part = stable_session_hash(key)
+        expected = {
+            f"garmin_livetrack_user_status_{hash_part}",
+            f"garmin_livetrack_user_active_{hash_part}",
+            f"garmin_livetrack_user_tracker_{hash_part}",
+        }
+        removed = 0
+        for entry in list(registry.entities.values()):
+            if entry.platform != DOMAIN:
+                continue
+            if entry.unique_id in expected:
+                registry.async_remove(entry.entity_id)
+                removed += 1
+
+        device_registry = dr.async_get(self.hass)
+        target_identifier = (DOMAIN, f"user:{hash_part}")
+        for device in list(device_registry.devices.values()):
+            if target_identifier in device.identifiers:
+                device_registry.async_remove_device(device.id)
+        return removed
+
     async def async_remove_user(self, user: str) -> bool:
         name = (user or "").strip()
         if not name:
             return False
         key = self._user_key(name)
-        removed = self.known_users.pop(key, None)
+        changed = False
+
+        removed_policy = self.known_users.pop(key, None)
+        if removed_policy is not None:
+            changed = True
+
         current = [u for u in self.options.get(CONF_ALLOWED_USERS, []) if isinstance(u, str)]
-        self.options[CONF_ALLOWED_USERS] = [u for u in current if self._user_key(u) != key]
-        await self.async_save_storage()
-        self._notify_listeners()
-        return removed is not None
+        filtered = [u for u in current if self._user_key(u) != key]
+        if filtered != current:
+            self.options[CONF_ALLOWED_USERS] = filtered
+            changed = True
+
+        if self._remove_user_policy_option(key):
+            changed = True
+
+        active_session_ids = [
+            sid
+            for sid, coord in self.sessions.items()
+            if self._user_key(coord.session.garmin_user) == key
+        ]
+        for sid in active_session_ids:
+            coord = self.sessions.pop(sid, None)
+            if coord is not None:
+                await coord.async_stop("user_removed")
+                changed = True
+
+        ended_session_ids = [
+            sid
+            for sid, session in self.ended_sessions.items()
+            if self._user_key(session.garmin_user) == key
+        ]
+        for sid in ended_session_ids:
+            self.ended_sessions.pop(sid, None)
+            changed = True
+
+        removed_entities = self._remove_user_registry_entities(key)
+        if removed_entities:
+            changed = True
+
+        if changed:
+            await self.async_save_storage()
+            self._notify_listeners()
+        return changed
 
     async def async_list_users(self) -> list[dict]:
         rows: list[dict] = []

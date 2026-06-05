@@ -977,3 +977,84 @@ async def test_strict_true_allows_user_from_allowed_users_registry(hass):
     assert result.ok is True
     assert result.status in {LiveTrackStatus.ACTIVE, LiveTrackStatus.WAITING_FOR_TRACKPOINT}
     assert "session-allowed" in m.sessions
+
+
+@pytest.mark.asyncio
+async def test_async_remove_user_purges_user_state(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        UrlAwareDummyClient(),
+        DummyStore(),
+        {
+            "allowed_users": ["Runner", "Other"],
+            "user_policies": {
+                "Runner": {
+                    "name": "Runner",
+                    "enabled": True,
+                    "mode": "normal",
+                },
+                "Other": {
+                    "name": "Other",
+                    "enabled": True,
+                    "mode": "normal",
+                },
+            },
+        },
+    )
+    await m.async_setup()
+
+    runner_identity = LiveTrackIdentity(
+        "runner-live",
+        "token",
+        "https://livetrack.garmin.com/session/runner-live/token/token",
+        "redacted",
+        LiveTrackSource.SERVICE,
+    )
+    runner_session = LiveTrackSession(
+        runner_identity,
+        "Runner",
+        "walking",
+        None,
+        None,
+        None,
+        datetime.now(UTC),
+        None,
+        None,
+        None,
+        0,
+        LiveTrackStatus.ACTIVE,
+    )
+    runner_coord = LiveTrackSessionCoordinator(m, runner_session)
+    m.sessions[runner_identity.session_id] = runner_coord
+
+    ended_identity = LiveTrackIdentity(
+        "runner-ended",
+        "token",
+        "https://livetrack.garmin.com/session/runner-ended/token/token",
+        "redacted",
+        LiveTrackSource.SERVICE,
+    )
+    ended_session = LiveTrackSession(
+        ended_identity,
+        "Runner",
+        "walking",
+        None,
+        None,
+        datetime.now(UTC),
+        datetime.now(UTC),
+        None,
+        None,
+        None,
+        0,
+        LiveTrackStatus.ENDED,
+    )
+    m.ended_sessions[ended_identity.session_id] = ended_session
+
+    changed = await m.async_remove_user("Runner")
+
+    assert changed is True
+    assert "runner" not in m.known_users
+    assert m.options["allowed_users"] == ["Other"]
+    assert list(m.options["user_policies"].keys()) == ["Other"]
+    assert runner_identity.session_id not in m.sessions
+    assert ended_identity.session_id not in m.ended_sessions

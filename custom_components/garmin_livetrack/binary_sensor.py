@@ -11,7 +11,7 @@ from .models import (
     speed_kmh_from_mps,
     stable_session_hash,
 )
-from .sensor import _device_info, _discover_entity_keys, _entity_label, _integration_device_info, _select_session_for_user
+from .sensor import _SessionWrapper, _device_info, _discover_entity_keys, _entity_label, _integration_device_info, _select_session_snapshot, _select_session_for_user
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -118,13 +118,18 @@ class GarminUserActiveBinarySensor(_BaseBinary):
 
     @property
     def name(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return f"Garmin LiveTrack {_entity_label(self.entity_key, coord)} Active"
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        wrapped = coord if coord is not None else (_SessionWrapper(session) if session is not None else None)
+        return f"Garmin LiveTrack {_entity_label(self.entity_key, wrapped)} Active"
 
     @property
     def device_info(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return _device_info(self.entity_key, coord)
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if coord is not None:
+            return _device_info(self.entity_key, coord)
+        if session is not None:
+            return _device_info(self.entity_key, _SessionWrapper(session))
+        return _device_info(self.entity_key, None)
 
     @property
     def is_on(self):
@@ -133,7 +138,8 @@ class GarminUserActiveBinarySensor(_BaseBinary):
 
     @property
     def icon(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return "mdi:map-marker-path"
-        return activity_icon(coord.session.activity_type, self.is_on)
+        s = coord.session if coord else session
+        return activity_icon(s.activity_type, s.status in ACTIVE_STATES)

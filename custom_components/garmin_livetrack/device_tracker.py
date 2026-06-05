@@ -13,7 +13,7 @@ from .models import (
     speed_kmh_from_mps,
     stable_session_hash,
 )
-from .sensor import _device_info, _discover_entity_keys, _entity_label, _select_session_for_user
+from .sensor import _SessionWrapper, _device_info, _discover_entity_keys, _entity_label, _select_session_snapshot
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -51,13 +51,18 @@ class GarminUserTracker(TrackerEntity):
 
     @property
     def name(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return _entity_label(self.entity_key, coord)
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        wrapped = coord if coord is not None else (_SessionWrapper(session) if session is not None else None)
+        return _entity_label(self.entity_key, wrapped)
 
     @property
     def device_info(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        return _device_info(self.entity_key, coord)
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if coord is not None:
+            return _device_info(self.entity_key, coord)
+        if session is not None:
+            return _device_info(self.entity_key, _SessionWrapper(session))
+        return _device_info(self.entity_key, None)
 
     @property
     def source_type(self):
@@ -65,14 +70,14 @@ class GarminUserTracker(TrackerEntity):
 
     @property
     def latitude(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        point = coord.session.last_point if coord else None
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        point = coord.session.last_point if coord else (session.last_point if session else None)
         return point.latitude if point else None
 
     @property
     def longitude(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        point = coord.session.last_point if coord else None
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        point = coord.session.last_point if coord else (session.last_point if session else None)
         return point.longitude if point else None
 
     @property
@@ -81,10 +86,10 @@ class GarminUserTracker(TrackerEntity):
 
     @property
     def extra_state_attributes(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return {"entity_key": self.entity_key}
-        s = coord.session
+        s = coord.session if coord else session
         p = s.last_point
         return {
             "entity_key": self.entity_key,
@@ -107,8 +112,9 @@ class GarminUserTracker(TrackerEntity):
 
     @property
     def icon(self):
-        coord = _select_session_for_user(self.manager, self.entity_key)
-        if not coord:
+        session, coord = _select_session_snapshot(self.manager, self.entity_key)
+        if not session:
             return "mdi:map-marker-path"
-        is_active = coord.session.status in ACTIVE_STATES
-        return activity_icon(coord.session.activity_type, is_active)
+        s = coord.session if coord else session
+        is_active = s.status in ACTIVE_STATES
+        return activity_icon(s.activity_type, is_active)
