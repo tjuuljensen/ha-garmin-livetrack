@@ -342,6 +342,9 @@ class GarminUserStatusSensor(_BaseManagerSensor):
                     "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else None,
                     "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else None,
                     "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else None,
+                    "backoff_until": coord.backoff_until.isoformat() if coord and coord.backoff_until else None,
+                    "consecutive_http_failures": coord.consecutive_http_failures if coord else 0,
+                    "last_http_status": coord.last_http_status if coord else None,
                 }
             )
         attrs.update(_summary_metrics(s))

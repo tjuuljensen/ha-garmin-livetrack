@@ -42,9 +42,9 @@
                     "edit_user": "Edit user"
                 },
                 "data_description": {
-                    "allowed_users": "Comma-separated Garmin display names. Free text is kept so you can pre-register a user before their first LiveTrack arrives.",
+                    "allowed_users": "Comma-separated Garmin display names. You can pre-register a user before their first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
-                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning.",
+                    "update_profile": "Extended: 10 min. Conservative: 60 sec. Balanced: 30 sec. Adaptive: 15 sec metadata poll w. trackpoint publish-frequency gating. Advanced: low-level interval and lifecycle tuning.",
                     "edit_user": "Select a configured user to edit per-user policy."
                 }
             },

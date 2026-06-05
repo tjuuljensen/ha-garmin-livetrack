@@ -8,6 +8,7 @@ from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBina
 from custom_components.garmin_livetrack.const import EVENT_POINT_RECEIVED
 from custom_components.garmin_livetrack.icons import activity_icon
 from custom_components.garmin_livetrack.models import (
+    LiveTrackError,
     LiveTrackIdentity,
     LiveTrackPoint,
     LiveTrackSession,
@@ -77,16 +78,16 @@ class UrlAwareDummyClient:
 
 
 class SequenceFetch:
-    def __init__(self, *, fetched_at, trackpoint_count, session=None, last_trackpoint=None, ok=True):
+    def __init__(self, *, fetched_at, trackpoint_count, session=None, last_trackpoint=None, ok=True, errors=None, page_status=200, api_status=200):
         self.ok = ok
         self.session = session or {}
         self.source = {"trackpoints_source": "api_or_payload"}
         self.trackpoint_count = trackpoint_count
         self.last_trackpoint = last_trackpoint or {}
         self.fetched_at = fetched_at
-        self.errors = []
-        self.page_status = 200
-        self.api_status = 200
+        self.errors = errors or []
+        self.page_status = page_status
+        self.api_status = api_status
 
 
 @pytest.mark.parametrize(
@@ -851,3 +852,100 @@ async def test_cleanup_legacy_entities_removes_deprecated_session_count(monkeypa
 
     assert count == 1
     assert fake_registry.removed == ["sensor.garmin_livetrack_session_count"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_backoff_escalates_and_clears_on_success(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    fetches = [
+        SequenceFetch(
+            fetched_at=base,
+            trackpoint_count=0,
+            ok=False,
+            errors=[LiveTrackError("session_http_error", "HTTP 429", base, True)],
+            api_status=429,
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=2),
+            trackpoint_count=0,
+            ok=False,
+            errors=[LiveTrackError("session_http_error", "HTTP 429", base + timedelta(minutes=2), True)],
+            api_status=429,
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(minutes=6),
+            trackpoint_count=1,
+            session={"sessionId": "backoff-429", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:06:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+            },
+        ),
+    ]
+    m = GarminLiveTrackManager(hass, SequenceClient(fetches), DummyStore(), {})
+    await m.async_setup()
+    identity = LiveTrackIdentity("backoff-429", "token", "https://livetrack.garmin.com/session/backoff-429/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+
+    await coord._refresh_once()
+    assert coord.consecutive_http_failures == 1
+    assert coord.last_http_status == 429
+    assert coord.backoff_until == base + timedelta(minutes=2)
+
+    coord.backoff_until = base
+    await coord._refresh_once()
+    assert coord.consecutive_http_failures == 2
+    assert coord.backoff_until == base + timedelta(minutes=6)
+
+    coord.backoff_until = base + timedelta(minutes=2)
+    await coord._refresh_once()
+    assert coord.consecutive_http_failures == 0
+    assert coord.backoff_until is None
+    assert coord.last_http_status is None
+    assert coord.session.status == LiveTrackStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_server_error_backoff_and_debug_attributes(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    fetches = [
+        SequenceFetch(
+            fetched_at=base,
+            trackpoint_count=0,
+            ok=False,
+            errors=[LiveTrackError("session_http_error", "HTTP 503", base, True)],
+            api_status=503,
+        ),
+        SequenceFetch(
+            fetched_at=base + timedelta(seconds=31),
+            trackpoint_count=1,
+            session={"sessionId": "backoff-503", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:00:31Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+            },
+        ),
+    ]
+    m = GarminLiveTrackManager(hass, SequenceClient(fetches), DummyStore(), {"expose_debug_attributes": True})
+    await m.async_setup()
+    identity = LiveTrackIdentity("backoff-503", "token", "https://livetrack.garmin.com/session/backoff-503/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, "Runner", "running", None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+    m.sessions["backoff-503"] = coord
+
+    await coord._refresh_once()
+    assert coord.consecutive_http_failures == 1
+    assert coord.last_http_status == 503
+    assert coord.backoff_until == base + timedelta(seconds=30)
+
+    sensor = GarminUserStatusSensor(m, "runner")
+    attrs = sensor.extra_state_attributes
+    assert attrs["consecutive_http_failures"] == 1
+    assert attrs["last_http_status"] == 503
+    assert attrs["backoff_until"] == (base + timedelta(seconds=30)).isoformat()
+
+    coord.backoff_until = base
+    await coord._refresh_once()
+    assert coord.consecutive_http_failures == 0
+    assert coord.backoff_until is None

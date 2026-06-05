@@ -44,6 +44,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
                 "post_trackpoint_frequency_s": c.post_trackpoint_frequency_s,
                 "last_trackpoint_fetch": c.last_trackpoint_fetch.isoformat() if c.last_trackpoint_fetch else None,
                 "next_trackpoints_allowed_at": c.next_trackpoints_allowed_at.isoformat() if c.next_trackpoints_allowed_at else None,
+                "backoff_until": c.backoff_until.isoformat() if c.backoff_until else None,
+                "consecutive_http_failures": c.consecutive_http_failures,
+                "last_http_status": c.last_http_status,
                 "error_codes": [e.code for e in c.session.errors],
             }
             for c in sessions.values()

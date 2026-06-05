@@ -115,6 +115,9 @@ class LiveTrackSessionCoordinator:
         self.next_trackpoints_allowed_at: datetime | None = None
         self.post_trackpoint_frequency_s: int | None = None
         self.last_trackpoint_fetch: datetime | None = None
+        self.backoff_until: datetime | None = None
+        self.consecutive_http_failures: int = 0
+        self.last_http_status: int | None = None
 
     async def async_start(self) -> None:
         if self._task and not self._task.done():
@@ -172,6 +175,10 @@ class LiveTrackSessionCoordinator:
                 pass
 
     async def _refresh_once(self) -> None:
+        now = datetime.now(UTC)
+        if self.backoff_until and now < self.backoff_until:
+            await self._handle_backoff_window(now)
+            return
         self.session.status = LiveTrackStatus.FETCHING
         previous_last_point = self.session.last_point
         previous_last_timestamp = previous_last_point.timestamp if previous_last_point else None
@@ -181,6 +188,7 @@ class LiveTrackSessionCoordinator:
         self.last_api_status = fetch.api_status
         self.last_source_branch = str(fetch.source.get("trackpoints_source", "none")) if isinstance(fetch.source, dict) else "none"
         self.session.errors.extend(fetch.errors[-3:])
+        self._apply_fetch_backoff(fetch)
         if fetch.errors:
             self.manager.last_error = fetch.errors[-1].code
             codes = {e.code for e in fetch.errors}
@@ -391,6 +399,52 @@ class LiveTrackSessionCoordinator:
         if point.event_types:
             payload["eventTypes"] = list(point.event_types)
         return payload
+
+
+    async def _handle_backoff_window(self, now: datetime) -> None:
+        if self.session.status not in {LiveTrackStatus.ENDING, LiveTrackStatus.ENDED, LiveTrackStatus.STALE, LiveTrackStatus.EXPIRED, LiveTrackStatus.STOPPED}:
+            if self.session.trackpoint_count > 0:
+                self.session.status = LiveTrackStatus.ACTIVE
+            else:
+                self.session.status = LiveTrackStatus.WAITING_FOR_TRACKPOINT
+        if await self._handle_no_progress(now=now):
+            return
+        await self._handle_end_state()
+        self.manager._notify_listeners()
+        self.manager.hass.bus.async_fire(
+            EVENT_SESSION_UPDATED,
+            self.manager._session_event_payload(self.session),
+        )
+
+    def _apply_fetch_backoff(self, fetch) -> None:
+        decision = self._classify_fetch_backoff(fetch)
+        if decision is None:
+            self._clear_fetch_backoff()
+            return
+        base_seconds, max_seconds, http_status = decision
+        delay = min(max_seconds, base_seconds * (2 ** max(0, self.consecutive_http_failures)))
+        self.consecutive_http_failures += 1
+        self.backoff_until = fetch.fetched_at + timedelta(seconds=delay)
+        self.last_http_status = http_status
+
+    def _clear_fetch_backoff(self) -> None:
+        self.backoff_until = None
+        self.consecutive_http_failures = 0
+        self.last_http_status = None
+
+    def _classify_fetch_backoff(self, fetch) -> tuple[int, int, int | None] | None:
+        statuses = [status for status in (fetch.api_status, fetch.page_status) if isinstance(status, int)]
+        if 429 in statuses:
+            return (120, 900, 429)
+        status_5xx = next((status for status in statuses if status >= 500), None)
+        if status_5xx is not None:
+            return (30, 600, status_5xx)
+        if 403 in statuses:
+            return (60, 300, 403)
+        retryable_codes = {error.code for error in getattr(fetch, "errors", []) if getattr(error, "retryable", False)}
+        if retryable_codes & {"page_request_error", "session_request_error", "trackpoints_request_error", "malformed_response"}:
+            return (30, 600, None)
+        return None
 
     async def _handle_end_state(self, first_success: bool = False) -> None:
         now = datetime.now(UTC)
