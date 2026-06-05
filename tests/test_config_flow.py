@@ -85,7 +85,6 @@ async def test_advanced_step_missing_user_agent_reverts_to_default(hass):
     second = await flow.async_step_advanced_profile(
         {
             "advanced_profile_defaults": "conservative",
-            "expose_debug_attributes": False,
         }
     )
 
@@ -111,7 +110,7 @@ async def test_advanced_step_missing_user_agent_reverts_to_default(hass):
 
 
 @pytest.mark.asyncio
-async def test_advanced_profile_defaults_to_existing_settings_when_present(hass):
+async def test_advanced_profile_step_defaults_to_existing_when_advanced_settings_exist(hass):
     class _FakeConfigEntry:
         data = {}
         options = {

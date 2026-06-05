@@ -15,7 +15,7 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
-                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning."
+                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning."
                 }
             }
         },
@@ -44,7 +44,7 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names. Free text is kept so you can pre-register a user before their first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
-                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning.",
+                    "update_profile": "Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Extended uses 10 minutes. Conservative uses 60 seconds. Balanced uses 30 seconds. Adaptive uses 15-second metadata polling with Garmin trackpoint publish-frequency gating. Advanced opens low-level interval and lifecycle tuning.",
                     "edit_user": "Select a configured user to edit per-user policy."
                 }
             },
@@ -52,12 +52,10 @@
                 "title": "Advanced Preset",
                 "description": "Choose a preset baseline before editing advanced runtime settings.",
                 "data": {
-                    "advanced_profile_defaults": "Preset baseline",
-                    "expose_debug_attributes": "Expose debug attributes"
+                    "advanced_profile_defaults": "Preset baseline"
                 },
                 "data_description": {
-                    "advanced_profile_defaults": "Applies a preset baseline for the advanced timing values on the next step.",
-                    "expose_debug_attributes": "When enabled, session entities expose advanced troubleshooting attributes such as API/page status and poll task state."
+                    "advanced_profile_defaults": "Select Existing settings to keep your current advanced values, or choose a default preset to prefill the next page."
                 }
             },
             "advanced": {
@@ -79,7 +77,7 @@
                     "user_agent": "HTTP User-Agent sent to Garmin for page and API requests.",
                     "expose_debug_attributes": "When enabled, session entities expose advanced troubleshooting attributes such as API/page status and poll task state.",
                     "update_interval_seconds": "Used only in Advanced profile. Metadata polling interval in seconds.",
-                    "use_garmin_trackpoint_frequency": "Used only in Advanced profile. When enabled, trackpoint fetches wait until Garmin is likely to have published a new point.",
+                    "use_garmin_trackpoint_frequency": "Advanced override for Garmin trackpoint publish-frequency gating. The Adaptive profile enables the same behavior automatically.",
                     "initial_trackpoint_wait_minutes": "Used only in Advanced profile. How long the integration waits for the first usable point before moving toward stale handling.",
                     "max_runtime_hours": "Used only in Advanced profile. Maximum lifetime for one tracked session before it is expired.",
                     "stale_minutes": "Used only in Advanced profile. No-progress window before the session starts stale or inferred-end handling.",

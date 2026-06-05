@@ -181,10 +181,6 @@ def _advanced_profile_schema(defaults: dict) -> vol.Schema:
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Required(
-                CONF_EXPOSE_DEBUG_ATTRIBUTES,
-                default=defaults.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES),
-            ): bool,
         }
     )
 
@@ -224,6 +220,9 @@ def _normalize(inp: dict, *, include_users: bool) -> dict:
     if profile not in UPDATE_PROFILE_VALUES:
         profile = DEFAULT_UPDATE_PROFILE
     out[CONF_UPDATE_PROFILE] = profile
+    if CONF_USER_AGENT in out:
+        user_agent = str(out.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or "").strip()
+        out[CONF_USER_AGENT] = user_agent or DEFAULT_USER_AGENT
     out.pop(CONF_EDIT_USER, None)
     return out
 
@@ -266,7 +265,6 @@ def _normalize_advanced_profile(inp: dict) -> dict:
     if baseline not in {"existing", "extended", "conservative", "balanced", "adaptive"}:
         baseline = "conservative"
     out[CONF_ADVANCED_BASELINE] = baseline
-    out[CONF_EXPOSE_DEBUG_ATTRIBUTES] = bool(out.get(CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES))
     return out
 
 
@@ -390,7 +388,7 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
             "has_existing_advanced": self._has_existing_advanced_settings(defaults),
         }
         if profile_defaults["has_existing_advanced"]:
-            profile_defaults[CONF_ADVANCED_BASELINE] = defaults.get(CONF_ADVANCED_BASELINE, "existing") or "existing"
+            profile_defaults[CONF_ADVANCED_BASELINE] = "existing"
         errors = {}
         if user_input is not None:
             try:
