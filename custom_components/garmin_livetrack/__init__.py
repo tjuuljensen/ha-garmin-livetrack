@@ -23,6 +23,19 @@ from .coordinator import GarminLiveTrackManager
 
 _LOGGER = logging.getLogger(__name__)
 
+LEGACY_NOTIFICATION_OPTION_KEYS = {
+    "enable_notifications",
+    "notify_service",
+    "ios_notification_style",
+    "notification_start_template",
+    "notification_end_template",
+}
+LEGACY_NOTIFICATION_POLICY_KEYS = {
+    "enable_notifications",
+    "notify_service",
+    "ios_notification_style",
+}
+
 
 @dataclass
 class IntegrationRuntimeData:
@@ -35,10 +48,49 @@ class IntegrationRuntimeData:
     recovery_complete: bool = False
 
 
+def _sanitize_user_policy_rows(value):
+    changed = False
+    if not isinstance(value, dict):
+        return value, changed
+    sanitized: dict = {}
+    for key, row in value.items():
+        if isinstance(row, dict):
+            clean_row = dict(row)
+            for legacy_key in LEGACY_NOTIFICATION_POLICY_KEYS:
+                if legacy_key in clean_row:
+                    clean_row.pop(legacy_key, None)
+                    changed = True
+            sanitized[key] = clean_row
+        else:
+            sanitized[key] = row
+    return sanitized, changed
+
+
+def _sanitize_entry_payload(data: dict | None, options: dict | None) -> tuple[dict, dict, bool]:
+    clean_data = dict(data or {})
+    clean_options = dict(options or {})
+    changed = False
+    for payload in (clean_data, clean_options):
+        for legacy_key in LEGACY_NOTIFICATION_OPTION_KEYS:
+            if legacy_key in payload:
+                payload.pop(legacy_key, None)
+                changed = True
+        policies = payload.get("user_policies")
+        sanitized_policies, policies_changed = _sanitize_user_policy_rows(policies)
+        if policies_changed:
+            payload["user_policies"] = sanitized_policies
+            changed = True
+    return clean_data, clean_options, changed
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    clean_data, clean_options, migrated_legacy_notification = _sanitize_entry_payload(entry.data, entry.options)
+    if migrated_legacy_notification:
+        hass.config_entries.async_update_entry(entry, data=clean_data, options=clean_options)
+        _LOGGER.debug("Garmin LiveTrack migrated legacy notification settings out of the config entry")
     session = aiohttp_client.async_get_clientsession(hass)
     storage = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-    manager = GarminLiveTrackManager(hass, GarminLiveTrackClient(hass, session), storage, {**entry.data, **entry.options})
+    manager = GarminLiveTrackManager(hass, GarminLiveTrackClient(hass, session), storage, {**clean_data, **clean_options})
     manager.startup_debug["setup_entry_started"] = datetime.now(UTC).isoformat()
     _LOGGER.debug("Garmin LiveTrack startup diag: setup_entry started")
     await manager.async_setup()
@@ -54,7 +106,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _options_updated(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         rt = config_entry.runtime_data
-        rt.manager.options = {**config_entry.data, **config_entry.options}
+        clean_data, clean_options, migrated = _sanitize_entry_payload(config_entry.data, config_entry.options)
+        if migrated:
+            hass.config_entries.async_update_entry(config_entry, data=clean_data, options=clean_options)
+            _LOGGER.debug("Garmin LiveTrack migrated legacy notification settings out of updated options")
+        rt.manager.options = {**clean_data, **clean_options}
         rt.manager._sync_client_options()
         rt.manager._apply_option_user_policies()
         await rt.manager._update_imap_listener()
@@ -141,4 +197,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    clean_data, clean_options, migrated = _sanitize_entry_payload(config_entry.data, config_entry.options)
+    if migrated:
+        hass.config_entries.async_update_entry(config_entry, data=clean_data, options=clean_options)
+        _LOGGER.debug("Garmin LiveTrack migrated legacy notification settings out of the config entry")
     return True

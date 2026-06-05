@@ -5,7 +5,14 @@ from homeassistant.components.device_tracker.config_entry import TrackerEntity
 
 from .coordinator import ACTIVE_STATES
 from .icons import activity_icon
-from .models import stable_session_hash
+from .models import (
+    distance_km_from_m,
+    duration_hms_from_seconds,
+    has_location,
+    pace_min_km_from_speed_mps,
+    speed_kmh_from_mps,
+    stable_session_hash,
+)
 from .sensor import _device_info, _discover_entity_keys, _entity_label, _select_session_for_user
 
 
@@ -83,10 +90,18 @@ class GarminUserTracker(TrackerEntity):
             "entity_key": self.entity_key,
             "session_id_hash": stable_session_hash(s.identity.session_id),
             "activity": s.activity_type,
+            "activity_type": s.activity_type,
+            "activity_type_raw": s.activity_type_raw,
             "garmin_user": s.garmin_user,
             "status": s.status.value,
             "altitude": p.altitude_m if p else None,
             "speed": p.speed_mps if p else None,
+            "speed_kmh": speed_kmh_from_mps(p.speed_mps) if p else None,
+            "pace_min_km": pace_min_km_from_speed_mps(p.speed_mps) if p else None,
+            "distance_km": distance_km_from_m(p.distance_m) if p else None,
+            "duration_hms": duration_hms_from_seconds(p.duration_s) if p else None,
+            "has_location": has_location(p),
+            "cadence": p.cadence if p else None,
             "last_trackpoint_time": p.timestamp.isoformat() if p and p.timestamp else None,
         }
 

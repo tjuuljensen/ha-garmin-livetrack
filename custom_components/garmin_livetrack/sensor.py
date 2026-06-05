@@ -5,7 +5,14 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import CONF_EXPOSE_DEBUG_ATTRIBUTES, DEFAULT_EXPOSE_DEBUG_ATTRIBUTES, DOMAIN
 from .icons import activity_icon
-from .models import stable_session_hash
+from .models import (
+    distance_km_from_m,
+    duration_hms_from_seconds,
+    has_location,
+    pace_min_km_from_speed_mps,
+    speed_kmh_from_mps,
+    stable_session_hash,
+)
 
 
 def _user_key(name: str | None) -> str:
@@ -102,43 +109,47 @@ def _summary_metrics(session):
     point = session.last_point
     if point is None:
         return {
+            "activity_type": session.activity_type,
+            "activity_type_raw": session.activity_type_raw,
             "last_trackpoint_time": None,
+            "has_location": False,
             "distance_km": None,
             "duration_s": None,
             "duration_min": None,
+            "duration_hms": None,
+            "speed_mps": None,
             "speed_kmh": None,
+            "pace_min_km": None,
             "pace_min_per_km": None,
             "heart_rate_bpm": None,
             "power_w": None,
+            "cadence": None,
             "altitude_m": None,
         }
 
-    distance_km = None
-    if point.distance_m is not None:
-        distance_km = round(float(point.distance_m) / 1000.0, 3)
-
     duration_s = None if point.duration_s is None else float(point.duration_s)
     duration_min = None if duration_s is None else round(duration_s / 60.0, 1)
-
-    speed_kmh = None
-    if point.speed_mps is not None:
-        speed_kmh = round(float(point.speed_mps) * 3.6, 2)
-
-    pace_min_per_km = None
-    if speed_kmh and speed_kmh > 0:
-        pace_min_per_km = round(60.0 / speed_kmh, 2)
-    elif duration_s and point.distance_m and float(point.distance_m) > 0:
-        pace_min_per_km = round((duration_s / 60.0) / (float(point.distance_m) / 1000.0), 2)
+    speed_kmh = speed_kmh_from_mps(point.speed_mps)
+    pace_min_km = pace_min_km_from_speed_mps(point.speed_mps)
+    if pace_min_km is None and duration_s and point.distance_m and float(point.distance_m) > 0:
+        pace_min_km = round((duration_s / 60.0) / (float(point.distance_m) / 1000.0), 2)
 
     return {
+        "activity_type": session.activity_type,
+        "activity_type_raw": session.activity_type_raw,
         "last_trackpoint_time": point.timestamp.isoformat() if point.timestamp else None,
-        "distance_km": distance_km,
+        "has_location": has_location(point),
+        "distance_km": distance_km_from_m(point.distance_m),
         "duration_s": duration_s,
         "duration_min": duration_min,
+        "duration_hms": duration_hms_from_seconds(duration_s),
+        "speed_mps": point.speed_mps,
         "speed_kmh": speed_kmh,
-        "pace_min_per_km": pace_min_per_km,
+        "pace_min_km": pace_min_km,
+        "pace_min_per_km": pace_min_km,
         "heart_rate_bpm": point.heart_rate_bpm,
         "power_w": point.power_w,
+        "cadence": point.cadence,
         "altitude_m": point.altitude_m,
     }
 
@@ -309,6 +320,8 @@ class GarminUserStatusSensor(_BaseManagerSensor):
             "source": s.identity.source.value,
             "garmin_user": s.garmin_user,
             "activity": s.activity_type,
+            "activity_type": s.activity_type,
+            "activity_type_raw": s.activity_type_raw,
             "status_icon": _status_icon(s.status.value),
             "activity_icon": activity_icon(s.activity_type, s.status.value == "active"),
             "end_reason": s.end_reason,
@@ -326,6 +339,9 @@ class GarminUserStatusSensor(_BaseManagerSensor):
                     "api_status": coord.last_api_status if coord else None,
                     "trackpoints_source": coord.last_source_branch if coord else "ended",
                     "poll_task_alive": bool(coord and coord._task and not coord._task.done()),
+                    "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else None,
+                    "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else None,
+                    "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else None,
                 }
             )
         attrs.update(_summary_metrics(s))

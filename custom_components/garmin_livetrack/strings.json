@@ -6,16 +6,12 @@
                 "description": "Configure Garmin LiveTrack integration.",
                 "data": {
                     "listen_to_imap_events": "Listen for IMAP events",
-                    "enable_notifications": "Enable notifications",
-                    "notify_service": "Notification target",
                     "user_agent": "HTTP User-Agent",
-                    "notification_start_template": "Start notification message",
-                    "notification_end_template": "End notification message",
-                    "ios_notification_style": "Use iOS-style notification payload",
                     "strict_users": "Require configured users",
                     "accept_first_seen_users": "Accept first event from unknown users",
                     "allowed_users": "Configured users",
                     "activity_filter": "Default activity filter",
+                    "update_profile": "Update profile",
                     "update_interval_seconds": "Update interval (seconds)",
                     "initial_trackpoint_wait_minutes": "Initial trackpoint wait (minutes)",
                     "max_runtime_hours": "Maximum runtime (hours)",
@@ -28,10 +24,8 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
-                    "notify_service": "Select a notify service such as notify.notify or notify.mobile_app_phone.",
+                    "update_profile": "Conservative keeps the current slow polling behavior. Balanced keeps the same fetch strategy with a more responsive intent. Adaptive fast uses Garmin postTrackPointFrequency to avoid requesting new points before Garmin is likely to have published them.",
                     "user_agent": "HTTP User-Agent sent to Garmin. Leave the default unless Garmin behavior or troubleshooting requires a custom value.",
-                    "notification_start_template": "Message template for start notifications. Supported placeholders: user, activity, source, url, session_id_hash.",
-                    "notification_end_template": "Message template for end notifications. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "Expose advanced troubleshooting attributes such as API/page status and poll task state on session entities."
                 }
             }
@@ -40,8 +34,7 @@
             "single_instance_allowed": "Only one Garmin LiveTrack configuration is allowed"
         },
         "error": {
-            "invalid_notify_service": "Notify service must look like notify.something",
-            "invalid_user_agent": "User-Agent must be non-empty and 256 characters or fewer",
+            "invalid_user_agent": "User-Agent must be 256 characters or fewer",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     },
@@ -52,16 +45,12 @@
                 "description": "Update global Garmin LiveTrack settings. Optionally choose one user to edit.",
                 "data": {
                     "listen_to_imap_events": "Listen for IMAP events",
-                    "enable_notifications": "Enable notifications",
-                    "notify_service": "Notification target",
                     "user_agent": "HTTP User-Agent",
-                    "notification_start_template": "Start notification message",
-                    "notification_end_template": "End notification message",
-                    "ios_notification_style": "Use iOS-style notification payload",
                     "strict_users": "Require configured users",
                     "accept_first_seen_users": "Accept first event from unknown users",
                     "allowed_users": "Configured users",
                     "activity_filter": "Default activity filter",
+                    "update_profile": "Update profile",
                     "update_interval_seconds": "Update interval (seconds)",
                     "initial_trackpoint_wait_minutes": "Initial trackpoint wait (minutes)",
                     "max_runtime_hours": "Maximum runtime (hours)",
@@ -75,10 +64,8 @@
                 "data_description": {
                     "allowed_users": "Comma-separated Garmin display names. Free text is kept so you can pre-register a user before their first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
-                    "notify_service": "Default notify service for users without a custom override, for example notify.notify.",
+                    "update_profile": "Conservative is safest for Garmin and long activities. Balanced aims for better dashboard responsiveness. Adaptive fast still respects Garmin publishing cadence and only requests trackpoints when a new point is likely to be available.",
                     "user_agent": "HTTP User-Agent sent to Garmin for page and API requests.",
-                    "notification_start_template": "Template used when a LiveTrack starts. Supported placeholders: user, activity, source, url, session_id_hash.",
-                    "notification_end_template": "Template used when a LiveTrack ends. Supported placeholders: user, activity, reason, source, url, session_id_hash, distance_km, duration_min.",
                     "expose_debug_attributes": "When enabled, session entities expose advanced troubleshooting attributes such as API/page status and poll task state.",
                     "edit_user": "Select a configured user to edit per-user policy."
                 }
@@ -89,25 +76,18 @@
                 "data": {
                     "enabled": "Tracking enabled",
                     "mode": "User handling mode",
-                    "user_enable_notifications_mode": "Notification enable mode",
-                    "notify_service": "Notification target override",
-                    "user_ios_notification_style_mode": "iOS-style notification mode",
                     "user_activity_mode": "Activity filter mode",
                     "allowed_activities": "Allowed activities"
                 },
                 "data_description": {
                     "mode": "normal tracks normally, register_only records the user but does not track, one_event_only allows one accepted event before disabling.",
-                    "user_enable_notifications_mode": "Inherit the global notification setting or override it for this user.",
-                    "notify_service": "Choose inherit_global to use the integration default, or pick a specific notify service such as notify.mobile_app_phone.",
-                    "user_ios_notification_style_mode": "Inherit the global iOS payload style or override it for this user.",
                     "user_activity_mode": "inherit_global uses the global default activity filter. custom overrides it for this user.",
                     "allowed_activities": "Only used when Activity filter mode is custom."
                 }
             }
         },
         "error": {
-            "invalid_notify_service": "Notify service must look like notify.something",
-            "invalid_user_agent": "User-Agent must be non-empty and 256 characters or fewer",
+            "invalid_user_agent": "User-Agent must be 256 characters or fewer",
             "invalid_allowed_activities": "Select at least one activity when using custom activity mode"
         }
     },

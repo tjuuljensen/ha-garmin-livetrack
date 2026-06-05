@@ -12,10 +12,10 @@ Implemented:
 - manual URL ingestion
 - IMAP event ingestion
 - independent concurrent session tracking
+- layered Garmin fetch strategy with a dedicated incremental trackpoint endpoint
+- adaptive fast polling using Garmin `postTrackPointFrequency` when enabled
 - per-user stable entities and device trackers
 - restart recovery
-- start/end notifications
-- configurable notification message templates
 - configurable HTTP User-Agent
 - diagnostics with redaction
 - repair signal for suspected Garmin response-shape changes
@@ -75,16 +75,12 @@ The integration uses one config entry with:
 
 ### Global options
 - `Listen for IMAP events`
-- `Enable notifications`
-- `Notification target`
 - `HTTP User-Agent`
-- `Start notification message`
-- `End notification message`
-- `Use iOS-style notification payload`
 - `Require configured users`
 - `Accept first event from unknown users`
 - `Configured users`
 - `Default activity filter`
+- `Update profile`
 - `Update interval (seconds)`
 - `Initial trackpoint wait (minutes)`
 - `Maximum runtime (hours)`
@@ -98,40 +94,35 @@ The integration uses one config entry with:
 Each known user can have overrides for:
 - tracking enabled/disabled
 - handling mode: `normal`, `register_only`, `one_event_only`
-- notification enable mode
-- notification target override
-- iOS-style payload mode
 - activity filter mode: `inherit_global` or `custom`
 - allowed activities when using custom mode
+
+### Update profiles
+- `Conservative`
+  - uses the configured update interval
+  - safest for Garmin and long activities
+- `Balanced`
+  - keeps the same overall fetch strategy
+  - intended for more responsive dashboards when you lower the update interval
+- `Adaptive fast`
+  - still fetches session metadata normally
+  - uses Garmin `postTrackPointFrequency` when available so trackpoint fetches are not attempted before Garmin is likely to have published a new point
+  - falls back to the configured update interval when Garmin does not provide a usable frequency
 
 ### User matching
 User policy matching is case-insensitive internally, while the original Garmin display name is preserved for display and diagnostics.
 
 Garmin identity is based on Garmin `userDisplayName`. It is a user-facing string and not a guaranteed immutable account identifier.
 
-## Notification Templates
-Start and end notification text is configurable from the options UI.
+## Notifications
+This integration does not send notifications directly.
 
-Default templates:
-- start: `LiveTrack started: {user} ({activity})`
-- end: `LiveTrack ended: {user} ({activity}) - {reason}`
+It exposes Home Assistant entities, device trackers, services, and events.
+Use Home Assistant automations, scripts, blueprints, or YAML packages to send
+mobile, persistent, voice, Android, or iOS notifications.
 
-Supported placeholders:
-- `user`
-- `activity`
-- `reason` for end notifications
-- `source`
-- `url`
-- `redacted_url`
-- `session_id_hash`
-- `distance_km`
-- `duration_min`
-
-Example templates:
-- `Start: {user} started {activity}`
-- `End: {user} finished {activity} after {duration_min} min ({distance_km} km) - {reason}`
-
-If a template is invalid, the integration falls back to the built-in default and logs a warning.
+An example package is available at:
+- [docs/garmin_livetrack_notifications_example_unverified.yaml](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\garmin_livetrack_notifications_example_unverified.yaml)
 
 ## Custom HTTP User-Agent
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
@@ -197,21 +188,13 @@ Clear retained ended sessions.
 ### `garmin_livetrack.reload_users`
 Reload stored user policies.
 
-### `garmin_livetrack.test_notification`
-Send a test notification using the current global notification settings.
-
-This validates notify routing and delivery path. It does not render a full live-session notification context.
-
 ### `garmin_livetrack.set_user_policy`
-Update user tracking policy, notification routing, and activity overrides.
+Update user tracking policy and activity overrides.
 
 Fields:
 - `user`
 - `enabled`
 - `mode`
-- `enable_notifications`
-- `notify_service`
-- `ios_notification_style`
 - `allowed_activities`
 
 ### `garmin_livetrack.remove_user`
@@ -222,6 +205,39 @@ Return known users plus stored and effective policy information.
 
 ### `garmin_livetrack.cleanup_legacy_entities`
 Remove orphaned Garmin LiveTrack entity-registry entries that are no longer provided by the integration.
+
+## Events
+The integration emits Home Assistant events for automation and package consumers:
+
+- `garmin_livetrack_session_added`
+- `garmin_livetrack_session_updated`
+- `garmin_livetrack_session_ended`
+- `garmin_livetrack_session_rejected`
+- `garmin_livetrack_point_received`
+
+Typical event payload fields include:
+- `session_id_hash`
+- `user`
+- `activity_type`
+- `activity_type_raw`
+- `activity_icon`
+- `source`
+- `status`
+- `reason` on ended and rejected events
+
+`garmin_livetrack_point_received` also includes normalized point metrics such as:
+- `latitude`
+- `longitude`
+- `speed_mps`
+- `speed_kmh`
+- `pace_min_km`
+- `distance_km`
+- `duration_s`
+- `duration_hms`
+- `heart_rate_bpm`
+- `power_w`
+- `cadence`
+- `event_types`
 
 ## Entities
 ### Global entities
@@ -264,7 +280,6 @@ LiveTrack URLs can come from:
 - IMAP event listener
 - service registration
 - storage load/save
-- notification dispatch
 - shape-change repair signal
 
 ### Session coordinators
@@ -280,23 +295,19 @@ Startup flow:
 4. defer restored polling by the configured startup delay
 5. start restored session pollers independently
 
-### Notification flow
-Notification routing is resolved in this order:
-1. user override
-2. global default
-
-Notification text is rendered from the global start/end templates.
-
-## Garmin Fetch and Parsing
+## Garmin Fetch Strategy
 ### Request flow
-The client:
-1. fetches the public LiveTrack page first
-2. captures cookies and possible CSRF token
-3. calls the Garmin session API
-4. falls back to hydration data if API trackpoints are missing
+The integration uses a layered Garmin fetch strategy:
+1. fetch the public LiveTrack page first
+2. capture cookies and possible CSRF token
+3. call the Garmin session API for metadata
+4. call Garmin's incremental trackpoint endpoint
+5. fall back to session-payload and hydration parsing if Garmin changes the trackpoint response shape
 
 ### Trackpoint extraction
-The client walks likely structures and selects the best candidate based on session-like and trackpoint-like content.
+The dedicated incremental endpoint is preferred because it is smaller and more precise. The broader parser remains in place as a resilience layer.
+
+The fallback parser walks likely structures and selects the best candidate based on session-like and trackpoint-like content.
 
 Sources include:
 - API `trackPoints`
@@ -305,6 +316,11 @@ Sources include:
 - Next.js `__NEXT_DATA__`
 - app-router or hydration payloads
 - nested arrays containing Garmin point-like dicts
+
+### Polling modes
+- `Conservative`: safest for Garmin and long activities.
+- `Balanced`: better dashboard responsiveness when paired with a lower update interval.
+- `Adaptive fast`: fastest useful updates without polling trackpoints faster than Garmin publishes them.
 
 ### Shape-change signal
 The integration watches for repeated anomalies such as:
@@ -387,7 +403,7 @@ Rules:
 - do not store raw token in normal entity state
 - do not log raw token
 - do not expose raw token in diagnostics
-- do not include raw token in notifications
+- do not include raw token in emitted events
 - persist token only in Home Assistant storage for restart recovery
 
 Retained ended-session summaries store the canonical URL so the status sensor can continue to expose the full URL after restart. This follows the same operator-visible URL policy used by live status entities.

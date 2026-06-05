@@ -7,6 +7,38 @@ from hashlib import sha256
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+DEFAULT_ACTIVITY = "other"
+
+ACTIVITY_ALIASES = {
+    "run": "running",
+    "running": "running",
+    "trail_running": "running",
+    "bike": "cycling",
+    "biking": "cycling",
+    "cycling": "cycling",
+    "road_biking": "cycling",
+    "mountain_biking": "cycling",
+    "indoor_cycling": "cycling",
+    "walk": "walking",
+    "walking": "walking",
+    "hike": "walking",
+    "hiking": "walking",
+    "strength": "strength",
+    "strength_training": "strength",
+    "gym": "strength",
+    "swim": "swimming",
+    "swimming": "swimming",
+    "open_water_swimming": "swimming",
+    "pool_swimming": "swimming",
+    "kayak": "kayak",
+    "kayaking": "kayak",
+    "canoe": "kayak",
+    "canoeing": "kayak",
+    "paddle_sports": "kayak",
+    "rowing": "rowing",
+    "indoor_rowing": "rowing",
+}
+
 
 class LiveTrackStatus(StrEnum):
     DISCOVERED = "discovered"
@@ -60,6 +92,7 @@ class LiveTrackPoint:
     duration_s: float | None = None
     heart_rate_bpm: int | None = None
     power_w: int | None = None
+    cadence: float | None = None
     event_types: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -81,8 +114,7 @@ class LiveTrackSession:
     errors: list[LiveTrackError] = field(default_factory=list)
     rejected_reason: str | None = None
     end_reason: str | None = None
-    notification_started_sent: bool = False
-    notification_ended_sent: bool = False
+    activity_type_raw: str | None = None
 
 
 def redact_token(value: str) -> str:
@@ -108,30 +140,41 @@ def stable_session_hash(session_id: str) -> str:
 
 def normalize_activity(value: str | None) -> str:
     if not value:
-        return "other"
-    low = value.strip().lower()
-    if "run" in low:
-        return "running"
-    if "walk" in low or "hike" in low:
-        return "walking"
-    if "cycl" in low or "bike" in low:
-        return "cycling"
-    if "strength" in low or "gym" in low or "weight" in low:
-        return "strength"
-    if "swim" in low:
-        return "swimming"
-    aliases = {
-        "run": "running",
-        "running": "running",
-        "walk": "walking",
-        "walking": "walking",
-        "bike": "cycling",
-        "cycling": "cycling",
-        "strength": "strength",
-        "swim": "swimming",
-        "swimming": "swimming",
-    }
-    return aliases.get(low, "other")
+        return DEFAULT_ACTIVITY
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    return ACTIVITY_ALIASES.get(normalized, normalized)
+
+
+def speed_kmh_from_mps(speed_mps: float | None) -> float | None:
+    if speed_mps is None:
+        return None
+    return round(float(speed_mps) * 3.6, 2)
+
+
+def pace_min_km_from_speed_mps(speed_mps: float | None) -> float | None:
+    if speed_mps is None or float(speed_mps) <= 0:
+        return None
+    return round(16.666666667 / float(speed_mps), 2)
+
+
+def distance_km_from_m(distance_m: float | None) -> float | None:
+    if distance_m is None:
+        return None
+    return round(float(distance_m) / 1000.0, 3)
+
+
+def duration_hms_from_seconds(duration_s: float | None) -> str | None:
+    if duration_s is None:
+        return None
+    total = max(0, int(round(float(duration_s))))
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    seconds = total % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def has_location(point: LiveTrackPoint | None) -> bool:
+    return bool(point and point.latitude is not None and point.longitude is not None)
 
 
 def parse_garmin_datetime(value: Any) -> datetime | None:

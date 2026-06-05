@@ -1,0 +1,298 @@
+###############################################################################
+# Garmin LiveTrack Notifications Package
+#
+# Purpose:
+#   Adds Home Assistant-side notifications for the Garmin LiveTrack integration.
+#   The integration remains responsible for Garmin communication, user approval,
+#   activity filtering, entities, state, and lifecycle events.
+#
+# Scope:
+#   This package only handles notification presentation and delivery.
+#
+# Design:
+#   - Notifications are grouped per Garmin user.
+#   - If one Garmin user somehow has multiple concurrent LiveTracks, notifications
+#     for that user reuse the same tag/group.
+#   - Strict user approval is handled by the Garmin LiveTrack integration.
+#   - Activity filtering is handled by the Garmin LiveTrack integration.
+#   - This package does not create derived per-user sensors.
+#
+# Preconditions:
+#   1. tjuuljensen Garmin LiveTrack integration is installed and configured.
+#   2. The integration emits lifecycle events such as:
+#        garmin_livetrack_session_added
+#        garmin_livetrack_session_ended
+#        garmin_livetrack_session_rejected
+#   3. At least one notify service exists, for example:
+#        notify.mobile_app_your_phone
+#
+# Configuration:
+#   - Set input_text.garmin_livetrack_notify_service to your notify service.
+#   - Set input_select.garmin_livetrack_mobile_platform to:
+#        generic
+#        android
+#        ios
+#
+# Android:
+#   Uses notification channel, high importance, sticky start notification,
+#   clickAction, vibration pattern, and grouped Garmin LiveTrack tags.
+#
+# iOS:
+#   Uses url, actions, group, tag, and time-sensitive push payload.
+#
+# Privacy:
+#   This package does not include raw tokens in notifications. If the integration
+#   exposes a safe public LiveTrack URL in event data, it may be used as a click URL.
+#
+# Historic reference:
+#   Adapted from the older Garmin LiveTrack package, which handled notification
+#   routing, iOS style payloads, start/end notifications, and cleanup in YAML.
+###############################################################################
+
+input_boolean:
+  garmin_livetrack_notifications:
+    name: Garmin LiveTrack Notifications
+    icon: mdi:message-text-fast-outline
+
+  garmin_livetrack_clear_notifications:
+    name: Garmin LiveTrack Clear Notifications
+    icon: mdi:message-check-outline
+
+input_select:
+  garmin_livetrack_mobile_platform:
+    name: Garmin LiveTrack Mobile Platform
+    icon: mdi:cellphone-message
+    options:
+      - generic
+      - android
+      - ios
+
+input_text:
+  garmin_livetrack_notify_service:
+    name: Garmin LiveTrack Notify Service
+    icon: mdi:bullhorn
+
+script:
+  garmin_livetrack_notify:
+    alias: Garmin LiveTrack Notify
+    mode: parallel
+    max: 20
+    fields:
+      title:
+        required: true
+        selector:
+          text:
+      message:
+        required: true
+        selector:
+          text:
+      garmin_user:
+        required: true
+        selector:
+          text:
+      livetrack_url:
+        required: false
+        selector:
+          text:
+      priority:
+        required: false
+        selector:
+          select:
+            options:
+              - normal
+              - high
+      clear_after:
+        required: false
+        selector:
+          boolean:
+    sequence:
+      - condition: state
+        entity_id: input_boolean.garmin_livetrack_notifications
+        state: "on"
+
+      - variables:
+          notify_service: "{{ states('input_text.garmin_livetrack_notify_service') }}"
+          platform: "{{ states('input_select.garmin_livetrack_mobile_platform') }}"
+          user_slug: >-
+            {{ garmin_user | default('unknown') | lower
+               | regex_replace(find='[^a-z0-9]+', replace='_')
+               | regex_replace(find='(^_|_$)', replace='') }}
+          tag_value: "garmin_livetrack_{{ user_slug }}"
+          group_value: "garmin_livetrack"
+          url_value: "{{ livetrack_url | default('/lovelace') }}"
+          priority_value: "{{ priority | default('normal') }}"
+          clear_enabled: "{{ clear_after | default(false) }}"
+
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ platform == 'android' }}"
+            sequence:
+              - action: "{{ notify_service }}"
+                data:
+                  title: "{{ title }}"
+                  message: "{{ message }}"
+                  data:
+                    tag: "{{ tag_value }}"
+                    group: "{{ group_value }}"
+                    channel: Garmin LiveTrack
+                    importance: high
+                    priority: "{{ 'high' if priority_value == 'high' else 'default' }}"
+                    notification_icon: mdi:map-marker-path
+                    clickAction: "{{ url_value }}"
+                    sticky: "{{ priority_value == 'high' }}"
+                    vibrationPattern: "100, 1000, 100, 1000"
+
+          - conditions:
+              - condition: template
+                value_template: "{{ platform == 'ios' }}"
+            sequence:
+              - action: "{{ notify_service }}"
+                data:
+                  title: "{{ title }}"
+                  message: "{{ message }}"
+                  data:
+                    tag: "{{ tag_value }}"
+                    group: "{{ group_value }}"
+                    url: "{{ url_value }}"
+                    actions:
+                      - action: OPEN_LIVETRACK
+                        title: Show Garmin LiveTrack
+                        uri: "{{ url_value }}"
+                      - action: DISMISS
+                        title: Dismiss
+                    push:
+                      interruption-level: "{{ 'time-sensitive' if priority_value == 'high' else 'active' }}"
+                      sound:
+                        name: default
+
+        default:
+          - action: "{{ notify_service }}"
+            data:
+              title: "{{ title }}"
+              message: "{{ message }}"
+              data:
+                tag: "{{ tag_value }}"
+                group: "{{ group_value }}"
+                url: "{{ url_value }}"
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{ clear_enabled
+                 and is_state('input_boolean.garmin_livetrack_clear_notifications', 'on') }}
+        then:
+          - delay: "00:05:00"
+          - action: "{{ notify_service }}"
+            data:
+              message: clear_notification
+              data:
+                tag: "{{ tag_value }}"
+
+automation:
+  - alias: Garmin LiveTrack - Notify Session Started
+    id: garmin_livetrack_notify_session_started
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: event
+        event_type: garmin_livetrack_session_added
+    variables:
+      garmin_user: >-
+        {{ trigger.event.data.user
+           | default(trigger.event.data.user_name
+           | default(trigger.event.data.user_display_name
+           | default('Garmin user'))) }}
+      first_name: "{{ garmin_user.split(' ')[0] }}"
+      activity: >-
+        {{ trigger.event.data.activity_type
+           | default(trigger.event.data.activity
+           | default('activity')) }}
+      livetrack_url: >-
+        {{ trigger.event.data.livetrack_url
+           | default(trigger.event.data.url
+           | default('/lovelace')) }}
+    actions:
+      - action: script.garmin_livetrack_notify
+        data:
+          title: LiveTrack
+          message: >-
+            {{ first_name }} started
+            {{ 'an' if activity in ['other', 'indoor_activity'] else 'a' }}
+            {{ activity }} session.
+          garmin_user: "{{ garmin_user }}"
+          livetrack_url: "{{ livetrack_url }}"
+          priority: high
+          clear_after: false
+
+  - alias: Garmin LiveTrack - Notify Session Ended
+    id: garmin_livetrack_notify_session_ended
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: event
+        event_type: garmin_livetrack_session_ended
+    variables:
+      garmin_user: >-
+        {{ trigger.event.data.user
+           | default(trigger.event.data.user_name
+           | default(trigger.event.data.user_display_name
+           | default('Garmin user'))) }}
+      first_name: "{{ garmin_user.split(' ')[0] }}"
+      activity: >-
+        {{ trigger.event.data.activity_type
+           | default(trigger.event.data.activity
+           | default('activity')) }}
+      distance_km: "{{ trigger.event.data.distance_km | default(none) }}"
+      duration: >-
+        {{ trigger.event.data.duration
+           | default(trigger.event.data.duration_hms
+           | default(trigger.event.data.duration_formatted
+           | default(none))) }}
+      livetrack_url: >-
+        {{ trigger.event.data.livetrack_url
+           | default(trigger.event.data.url
+           | default('/lovelace')) }}
+      message_text: >-
+        {{ first_name }} finished
+        {{ 'an' if activity in ['other', 'indoor_activity'] else 'a' }}
+        {% if distance_km not in [none, '', 'unknown', 'unavailable'] %}
+          {{ distance_km }} km
+        {% endif %}
+        {{ activity }} session
+        {% if duration not in [none, '', 'unknown', 'unavailable'] %}
+          in {{ duration }}
+        {% endif %}.
+    actions:
+      - action: script.garmin_livetrack_notify
+        data:
+          title: LiveTrack
+          message: "{{ message_text }}"
+          garmin_user: "{{ garmin_user }}"
+          livetrack_url: "{{ livetrack_url }}"
+          priority: normal
+          clear_after: true
+
+  - alias: Garmin LiveTrack - Notify Session Rejected
+    id: garmin_livetrack_notify_session_rejected
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: event
+        event_type: garmin_livetrack_session_rejected
+    variables:
+      garmin_user: >-
+        {{ trigger.event.data.user
+           | default(trigger.event.data.user_name
+           | default(trigger.event.data.user_display_name
+           | default('Garmin user'))) }}
+      reason: "{{ trigger.event.data.reason | default('rejected by integration policy') }}"
+    actions:
+      - action: script.garmin_livetrack_notify
+        data:
+          title: LiveTrack rejected
+          message: "{{ garmin_user }} was not tracked: {{ reason }}."
+          garmin_user: "{{ garmin_user }}"
+          livetrack_url: "/config/integrations"
+          priority: normal
+          clear_after: true

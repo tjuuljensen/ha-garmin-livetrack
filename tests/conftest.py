@@ -5,7 +5,16 @@ import pytest
 
 
 class _FakeBus:
+    def __init__(self):
+        self.fired = []
+
     def async_fire(self, event_type, event_data=None):
+        self.fired.append(
+            {
+                "event_type": event_type,
+                "event_data": event_data or {},
+            }
+        )
         return None
 
     def async_listen(self, event_type, listener):
@@ -53,6 +62,12 @@ class _FakeConfigEntries:
 
     async def async_forward_entry_setups(self, entry, platforms):
         return True
+
+    def async_update_entry(self, entry, *, data=None, options=None):
+        if data is not None:
+            entry.data = data
+        if options is not None:
+            entry.options = options
 
 
 class _FakeHass:

@@ -14,23 +14,18 @@ from .const import (
     CONF_ACCEPT_FIRST_SEEN_USERS,
     CONF_ACTIVITY_FILTER,
     CONF_ALLOWED_USERS,
-    CONF_ENABLE_NOTIFICATIONS,
     CONF_FINALIZATION_MINUTES,
-    CONF_IOS_NOTIFICATION_STYLE,
     CONF_LISTEN_TO_IMAP_EVENTS,
     CONF_MAX_RUNTIME_HOURS,
-    CONF_NOTIFICATION_END_TEMPLATE,
-    CONF_NOTIFICATION_START_TEMPLATE,
-    CONF_NOTIFY_SERVICE,
     CONF_STALE_MINUTES,
     CONF_STRICT_USERS,
+    CONF_UPDATE_PROFILE,
     CONF_UPDATE_INTERVAL,
     CONF_USER_AGENT,
     CONF_USER_POLICIES,
-    DEFAULT_NOTIFICATION_END_TEMPLATE,
-    DEFAULT_NOTIFICATION_START_TEMPLATE,
     DEFAULT_USER_AGENT,
     EVENT_IMAP_CONTENT,
+    EVENT_POINT_RECEIVED,
     EVENT_SESSION_ADDED,
     EVENT_SESSION_ENDED,
     EVENT_SESSION_REJECTED,
@@ -45,23 +40,29 @@ from .const import (
     SERVICE_REFRESH_SESSION,
     SERVICE_SET_USER_POLICY,
     SERVICE_STOP_SESSION,
-    SERVICE_TEST_NOTIFICATION,
 )
+from .icons import activity_icon
 from .models import (
+    distance_km_from_m,
+    duration_hms_from_seconds,
     LiveTrackIdentity,
     LiveTrackPoint,
     LiveTrackSession,
     LiveTrackSource,
     LiveTrackStatus,
+    has_location,
+    pace_min_km_from_speed_mps,
     extract_event_types,
     normalize_activity,
     parse_garmin_datetime,
+    speed_kmh_from_mps,
     stable_session_hash,
 )
 from .repairs import async_sync_shape_change_issue
 
 URL_RE = re.compile(r"https://livetrack\.garmin\.com/session/[^\"'>\s]+", re.IGNORECASE)
 _LOGGER = logging.getLogger(__name__)
+LEGACY_NOTIFICATION_POLICY_KEYS = {"enable_notifications", "notify_service", "ios_notification_style"}
 
 ACTIVE_STATES = {
     LiveTrackStatus.FETCHING,
@@ -87,33 +88,7 @@ class UserPolicy:
     last_seen: datetime | None = None
     first_event_consumed: bool = False
     mode: str = "normal"
-    enable_notifications: bool | None = None
-    notify_service: str | None = None
-    ios_notification_style: bool | None = None
     allowed_activities: list[str] | None = None
-
-
-def _display_end_reason(reason: str | None) -> str:
-    labels = {
-        "end_event": "Garmin END event",
-        "session_end": "Garmin session end",
-        "inactive_no_end": "inactive without Garmin END",
-        "no_progress": "no progress",
-        "no_trackpoints": "no trackpoints",
-        "fetch_stale": "fetch timeout",
-        "max_runtime": "max runtime reached",
-        "manual": "manually stopped",
-        "ended": "ended",
-    }
-    if not reason:
-        return "ended"
-    return labels.get(reason, reason.replace("_", " "))
-
-
-def _format_float(value: float | None, digits: int = 2) -> str:
-    if value is None:
-        return ""
-    return f"{value:.{digits}f}"
 
 
 class LiveTrackSessionCoordinator:
@@ -130,6 +105,9 @@ class LiveTrackSessionCoordinator:
         self.last_api_status: int | None = None
         self.last_source_branch: str = "none"
         self._logged_first_success = False
+        self.next_trackpoints_allowed_at: datetime | None = None
+        self.post_trackpoint_frequency_s: int | None = None
+        self.last_trackpoint_fetch: datetime | None = None
 
     async def async_start(self) -> None:
         if self._task and not self._task.done():
@@ -180,14 +158,17 @@ class LiveTrackSessionCoordinator:
                 within_initial = (datetime.now(UTC) - self.session.first_seen) < timedelta(minutes=initial_wait_minutes)
                 if within_initial:
                     interval = min(interval, 10)
+            timeout = self.manager._loop_wait_seconds(interval, self.next_trackpoints_allowed_at)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=max(30, interval))
+                await asyncio.wait_for(self._stop.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 pass
 
     async def _refresh_once(self) -> None:
         self.session.status = LiveTrackStatus.FETCHING
-        fetch = await self.manager.client.fetch(self.session.identity)
+        previous_last_point = self.session.last_point
+        previous_last_timestamp = previous_last_point.timestamp if previous_last_point else None
+        fetch = await self._fetch_runtime_state()
         self.session.last_fetch = fetch.fetched_at
         self.last_page_status = fetch.page_status
         self.last_api_status = fetch.api_status
@@ -230,19 +211,26 @@ class LiveTrackSessionCoordinator:
                 or fetch.last_trackpoint.get("activity")
                 or (fetch.last_trackpoint.get("fitnessPointData") or {}).get("activityType")
                 or (fetch.last_trackpoint.get("fitnessPointData") or {}).get("activity")
-                or self.session.activity_type
+                or self.session.activity_type_raw
             )
             if activity_raw:
+                self.session.activity_type_raw = str(activity_raw)
                 self.session.activity_type = normalize_activity(activity_raw)
             self.session.start = parse_garmin_datetime(fetch.session.get("start")) or self.session.start
             self.session.expected_end = parse_garmin_datetime(fetch.session.get("end")) or self.session.expected_end
+            self._update_trackpoint_frequency(fetch.session)
             self.session.trackpoint_count = fetch.trackpoint_count
-            self.session.last_point = self._to_point(fetch.last_trackpoint)
+            self.session.last_point = self._to_point(fetch.last_trackpoint) or self.session.last_point
 
             if self.session.trackpoint_count > 0:
                 self.session.status = LiveTrackStatus.ACTIVE
             else:
                 self.session.status = LiveTrackStatus.WAITING_FOR_TRACKPOINT
+
+            if self.session.last_point and self.post_trackpoint_frequency_s:
+                self.next_trackpoints_allowed_at = self._compute_next_trackpoints_allowed_at(self.session.last_point.timestamp)
+            elif self.manager._adaptive_fast_enabled():
+                self.next_trackpoints_allowed_at = fetch.fetched_at + timedelta(seconds=max(2, interval if (interval := int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))) else 2))
 
             if first_success and not self._logged_first_success:
                 self._logged_first_success = True
@@ -255,6 +243,10 @@ class LiveTrackSessionCoordinator:
                     self.last_source_branch,
                     self.session.garmin_user or "unknown",
                 )
+
+            current_timestamp = self.session.last_point.timestamp if self.session.last_point else None
+            if current_timestamp and current_timestamp != previous_last_timestamp:
+                self.manager._fire_point_received(self.session)
 
             if await self._handle_no_progress(now=fetch.fetched_at):
                 return
@@ -272,11 +264,126 @@ class LiveTrackSessionCoordinator:
         self.manager._notify_listeners()
         self.manager.hass.bus.async_fire(
             EVENT_SESSION_UPDATED,
-            {
-                "session_id_hash": stable_session_hash(self.session.identity.session_id),
-                "status": self.session.status.value,
-            },
+            self.manager._session_event_payload(self.session),
         )
+
+    async def _fetch_runtime_state(self):
+        if not self.manager._adaptive_fast_enabled():
+            return await self.manager.client.fetch(self.session.identity)
+        return await self._fetch_adaptive_state()
+
+    async def _fetch_adaptive_state(self):
+        session_fetch = await self.manager.client.fetch_session(self.session.identity)
+        if not session_fetch.ok:
+            return session_fetch
+
+        fetched_at = session_fetch.fetched_at
+        current_last_raw = self._point_to_fetch_payload(self.session.last_point)
+        current_count = self.session.trackpoint_count
+        should_fetch_trackpoints = (
+            self.session.last_point is None
+            or self.next_trackpoints_allowed_at is None
+            or fetched_at >= self.next_trackpoints_allowed_at
+        )
+        if not should_fetch_trackpoints:
+            session_fetch.trackpoint_count = current_count
+            session_fetch.last_trackpoint = current_last_raw
+            session_fetch.source["trackpoints_source"] = "deferred"
+            return session_fetch
+
+        begin = self.session.last_point.timestamp if self.session.last_point else None
+        trackpoint_fetch = await self.manager.client.fetch_trackpoints(self.session.identity, begin=begin)
+        self.last_trackpoint_fetch = trackpoint_fetch.fetched_at
+
+        incremental_points = self._new_trackpoints(trackpoint_fetch.trackpoints, self.session.last_point)
+        if incremental_points:
+            session_fetch.trackpoint_count = current_count + len(incremental_points)
+            session_fetch.last_trackpoint = incremental_points[-1]
+            session_fetch.source["trackpoints_source"] = "trackpoints_common"
+            session_fetch.errors.extend(trackpoint_fetch.errors)
+            return session_fetch
+
+        if not trackpoint_fetch.errors and begin is not None:
+            session_fetch.trackpoint_count = current_count
+            session_fetch.last_trackpoint = current_last_raw
+            session_fetch.source["trackpoints_source"] = "trackpoints_common"
+            return session_fetch
+
+        legacy = await self.manager.client.fetch_legacy_full(self.session.identity)
+        if self.session.last_point:
+            fallback_points = self._new_trackpoints(legacy.trackpoints, self.session.last_point)
+            if fallback_points:
+                legacy.trackpoint_count = current_count + len(fallback_points)
+                legacy.last_trackpoint = fallback_points[-1]
+            else:
+                legacy.trackpoint_count = current_count
+                legacy.last_trackpoint = current_last_raw
+        legacy.errors = session_fetch.errors + trackpoint_fetch.errors + legacy.errors
+        if isinstance(legacy.source, dict):
+            legacy.source["session_source"] = legacy.source.get("session_source", "api_or_payload")
+        return legacy
+
+    def _new_trackpoints(self, points: list[dict], previous_point: LiveTrackPoint | None) -> list[dict]:
+        if not points:
+            return []
+        previous_ts = previous_point.timestamp if previous_point else None
+        if previous_ts is None:
+            return [point for point in points if isinstance(point, dict)]
+        new_points: list[dict] = []
+        for point in points:
+            point_ts = parse_garmin_datetime(point.get("dateTime")) if isinstance(point, dict) else None
+            if point_ts and point_ts > previous_ts:
+                new_points.append(point)
+        return new_points
+
+    def _update_trackpoint_frequency(self, session_payload: dict) -> None:
+        raw = None
+        if isinstance(session_payload, dict):
+            raw = session_payload.get("postTrackPointFrequency")
+            if raw is None:
+                raw = session_payload.get("post_track_point_frequency")
+        try:
+            value = int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            value = None
+        self.post_trackpoint_frequency_s = value if value and value > 0 else None
+
+    def _compute_next_trackpoints_allowed_at(self, timestamp: datetime | None) -> datetime | None:
+        if timestamp is None:
+            return None
+        if self.post_trackpoint_frequency_s:
+            return timestamp + timedelta(seconds=self.post_trackpoint_frequency_s + 2)
+        interval = int(self.manager.options.get(CONF_UPDATE_INTERVAL, 60))
+        return timestamp + timedelta(seconds=interval)
+
+    def _point_to_fetch_payload(self, point: LiveTrackPoint | None) -> dict:
+        if point is None:
+            return {}
+        payload: dict[str, object] = {
+            "dateTime": point.timestamp.isoformat().replace("+00:00", "Z") if point.timestamp else None,
+            "position": {},
+            "fitnessPointData": {},
+        }
+        if point.latitude is not None:
+            payload["position"]["lat"] = point.latitude
+            payload["fitnessPointData"]["latitude"] = point.latitude
+        if point.longitude is not None:
+            payload["position"]["lon"] = point.longitude
+            payload["fitnessPointData"]["longitude"] = point.longitude
+        for key, value in {
+            "altitude": point.altitude_m,
+            "speed": point.speed_mps,
+            "distance": point.distance_m,
+            "duration": point.duration_s,
+            "heartRate": point.heart_rate_bpm,
+            "power": point.power_w,
+            "cadence": point.cadence,
+        }.items():
+            if value is not None:
+                payload[key] = value
+        if point.event_types:
+            payload["eventTypes"] = list(point.event_types)
+        return payload
 
     async def _handle_end_state(self, first_success: bool = False) -> None:
         now = datetime.now(UTC)
@@ -427,6 +534,7 @@ class LiveTrackSessionCoordinator:
             duration_s=raw.get("duration") if raw.get("duration") is not None else fpd.get("duration"),
             heart_rate_bpm=raw.get("heartRate") if raw.get("heartRate") is not None else fpd.get("heartRate"),
             power_w=raw.get("power") if raw.get("power") is not None else fpd.get("power"),
+            cadence=raw.get("cadence") if raw.get("cadence") is not None else fpd.get("cadence"),
             event_types=extract_event_types(raw),
             raw={},
         )
@@ -474,9 +582,61 @@ class GarminLiveTrackManager:
         value = str(self.options.get(CONF_USER_AGENT, DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT).strip()
         return value or DEFAULT_USER_AGENT
 
+    def _adaptive_fast_enabled(self) -> bool:
+        return str(self.options.get(CONF_UPDATE_PROFILE, "conservative") or "conservative").strip().lower() == "adaptive_fast"
+
+    def _loop_wait_seconds(self, base_interval: int, next_trackpoints_allowed_at: datetime | None) -> int:
+        if not self._adaptive_fast_enabled():
+            return max(30, base_interval)
+        wait_seconds = max(5, min(base_interval, 15))
+        if next_trackpoints_allowed_at is None:
+            return wait_seconds
+        delta = int((next_trackpoints_allowed_at - datetime.now(UTC)).total_seconds())
+        if delta <= 0:
+            return 2
+        return max(2, min(wait_seconds, delta))
+
     def _sync_client_options(self) -> None:
         if hasattr(self.client, "user_agent"):
             self.client.user_agent = self._effective_user_agent()
+
+    def _session_event_payload(self, session: LiveTrackSession) -> dict:
+        point = session.last_point
+        speed_kmh = speed_kmh_from_mps(point.speed_mps) if point else None
+        pace_min_km = pace_min_km_from_speed_mps(point.speed_mps) if point else None
+        duration_hms = duration_hms_from_seconds(point.duration_s) if point else None
+        return {
+            "session_id_hash": stable_session_hash(session.identity.session_id),
+            "user": session.garmin_user,
+            "activity_type": session.activity_type,
+            "activity_type_raw": session.activity_type_raw,
+            "activity_icon": activity_icon(session.activity_type, session.status in ACTIVE_STATES),
+            "source": session.identity.source.value,
+            "status": session.status.value,
+            "latitude": point.latitude if point else None,
+            "longitude": point.longitude if point else None,
+            "altitude_m": point.altitude_m if point else None,
+            "speed_mps": point.speed_mps if point else None,
+            "speed_kmh": speed_kmh,
+            "pace_min_km": pace_min_km,
+            "distance_km": distance_km_from_m(point.distance_m) if point else None,
+            "duration_s": point.duration_s if point else None,
+            "duration_hms": duration_hms,
+            "heart_rate_bpm": point.heart_rate_bpm if point else None,
+            "power_w": point.power_w if point else None,
+            "cadence": point.cadence if point else None,
+            "event_types": list(point.event_types) if point else [],
+            "has_location": has_location(point),
+        }
+
+    def _fire_point_received(self, session: LiveTrackSession) -> None:
+        point = session.last_point
+        if point is None:
+            return
+        self.hass.bus.async_fire(
+            EVENT_POINT_RECEIVED,
+            self._session_event_payload(session),
+        )
 
     @staticmethod
     def _serialize_point(point: LiveTrackPoint | None) -> dict | None:
@@ -492,6 +652,7 @@ class GarminLiveTrackManager:
             "duration_s": point.duration_s,
             "heart_rate_bpm": point.heart_rate_bpm,
             "power_w": point.power_w,
+            "cadence": point.cadence,
             "event_types": point.event_types,
         }
 
@@ -509,11 +670,13 @@ class GarminLiveTrackManager:
             duration_s=value.get("duration_s"),
             heart_rate_bpm=value.get("heart_rate_bpm"),
             power_w=value.get("power_w"),
+            cadence=value.get("cadence"),
             event_types=list(value.get("event_types") or []),
             raw={},
         )
 
     def _serialize_session(self, session: LiveTrackSession, *, include_token: bool) -> dict:
+        coord = self.sessions.get(self._session_key(session.identity.session_id))
         row = {
             "session_id": self._session_key(session.identity.session_id),
             "redacted_url": session.identity.redacted_url,
@@ -521,6 +684,7 @@ class GarminLiveTrackManager:
             "first_seen": session.first_seen.isoformat(),
             "garmin_user": session.garmin_user,
             "activity_type": session.activity_type,
+            "activity_type_raw": session.activity_type_raw,
             "start": session.start.isoformat() if session.start else None,
             "expected_end": session.expected_end.isoformat() if session.expected_end else None,
             "actual_end": session.actual_end.isoformat() if session.actual_end else None,
@@ -531,8 +695,9 @@ class GarminLiveTrackManager:
             "status": self._persistable_status(session.status).value,
             "rejected_reason": session.rejected_reason,
             "end_reason": session.end_reason,
-            "notification_started_sent": session.notification_started_sent,
-            "notification_ended_sent": session.notification_ended_sent,
+            "post_trackpoint_frequency_s": coord.post_trackpoint_frequency_s if coord else None,
+            "last_trackpoint_fetch": coord.last_trackpoint_fetch.isoformat() if coord and coord.last_trackpoint_fetch else None,
+            "next_trackpoints_allowed_at": coord.next_trackpoints_allowed_at.isoformat() if coord and coord.next_trackpoints_allowed_at else None,
         }
         if include_token:
             row["token"] = session.identity.token
@@ -568,6 +733,7 @@ class GarminLiveTrackManager:
             identity=identity,
             garmin_user=row.get("garmin_user"),
             activity_type=row.get("activity_type"),
+            activity_type_raw=row.get("activity_type_raw"),
             start=parse_garmin_datetime(row.get("start")),
             expected_end=parse_garmin_datetime(row.get("expected_end")),
             actual_end=parse_garmin_datetime(row.get("actual_end")),
@@ -579,8 +745,6 @@ class GarminLiveTrackManager:
             status=status,
             rejected_reason=row.get("rejected_reason"),
             end_reason=row.get("end_reason"),
-            notification_started_sent=row.get("notification_started_sent", False),
-            notification_ended_sent=row.get("notification_ended_sent", False),
         )
 
     def _prune_expired_ended_sessions(self, now: datetime | None = None) -> int:
@@ -655,14 +819,15 @@ class GarminLiveTrackManager:
             coord = LiveTrackSessionCoordinator(self, session)
             await coord.async_first_fetch()
             if not await self.async_validate_session_policy(session):
-                self.hass.bus.async_fire(EVENT_SESSION_REJECTED, {"session_id_hash": stable_session_hash(sid), "reason": session.rejected_reason})
+                payload = self._session_event_payload(session)
+                payload["reason"] = session.rejected_reason
+                self.hass.bus.async_fire(EVENT_SESSION_REJECTED, payload)
                 return AddUrlResult(False, session.status, stable_session_hash(sid), session.rejected_reason or "rejected")
 
             self._prune_duplicate_waiting_sessions_for_user(session)
             self.sessions[sid] = coord
             await coord.async_start()
-            self.hass.bus.async_fire(EVENT_SESSION_ADDED, {"session_id_hash": stable_session_hash(sid), "source": source.value})
-            await self.async_notify_start(session)
+            self.hass.bus.async_fire(EVENT_SESSION_ADDED, self._session_event_payload(session))
             await self.async_save_storage()
             self._notify_listeners()
             return AddUrlResult(True, session.status, stable_session_hash(sid), "added")
@@ -673,8 +838,9 @@ class GarminLiveTrackManager:
         coord.session.end_reason = reason
         self.ended_sessions[sid] = coord.session
         coord.session.actual_end = coord.session.actual_end or datetime.now(UTC)
-        await self.async_notify_end(coord.session, reason)
-        self.hass.bus.async_fire(EVENT_SESSION_ENDED, {"session_id_hash": stable_session_hash(sid), "reason": reason})
+        payload = self._session_event_payload(coord.session)
+        payload["reason"] = reason
+        self.hass.bus.async_fire(EVENT_SESSION_ENDED, payload)
         await self.async_save_storage()
         self._notify_listeners()
 
@@ -688,7 +854,9 @@ class GarminLiveTrackManager:
         coord.session.end_reason = reason
         coord.session.actual_end = datetime.now(UTC)
         self.ended_sessions[sid] = coord.session
-        self.hass.bus.async_fire(EVENT_SESSION_UPDATED, {"session_id_hash": stable_session_hash(sid), "status": LiveTrackStatus.STOPPED.value, "reason": reason})
+        payload = self._session_event_payload(coord.session)
+        payload["reason"] = reason
+        self.hass.bus.async_fire(EVENT_SESSION_UPDATED, payload)
         await self.async_save_storage()
         self._notify_listeners()
 
@@ -717,9 +885,12 @@ class GarminLiveTrackManager:
                     redacted_url=row.get("redacted_url", ""),
                     source=LiveTrackSource(row.get("source", LiveTrackSource.RECOVERY.value)),
                 )
-                session = LiveTrackSession(identity, row.get("garmin_user"), row.get("activity_type"), parse_garmin_datetime(row.get("start")), parse_garmin_datetime(row.get("expected_end")), None, first_seen, None, None, None, 0, LiveTrackStatus(row.get("status", LiveTrackStatus.DISCOVERED.value)))
+                session = LiveTrackSession(identity, row.get("garmin_user"), row.get("activity_type"), parse_garmin_datetime(row.get("start")), parse_garmin_datetime(row.get("expected_end")), None, first_seen, None, None, None, 0, LiveTrackStatus(row.get("status", LiveTrackStatus.DISCOVERED.value)), activity_type_raw=row.get("activity_type_raw"))
                 session.status = self._persistable_status(session.status)
                 coord = LiveTrackSessionCoordinator(self, session)
+                coord.post_trackpoint_frequency_s = row.get("post_trackpoint_frequency_s")
+                coord.last_trackpoint_fetch = parse_garmin_datetime(row.get("last_trackpoint_fetch"))
+                coord.next_trackpoints_allowed_at = parse_garmin_datetime(row.get("next_trackpoints_allowed_at"))
                 self._prune_duplicate_waiting_sessions_for_user(session)
                 self.sessions[identity.session_id] = coord
                 await coord.async_start()
@@ -759,6 +930,7 @@ class GarminLiveTrackManager:
                     identity=identity,
                     garmin_user=row.get("garmin_user"),
                     activity_type=row.get("activity_type"),
+                    activity_type_raw=row.get("activity_type_raw"),
                     start=parse_garmin_datetime(row.get("start")),
                     expected_end=parse_garmin_datetime(row.get("expected_end")),
                     actual_end=None,
@@ -768,11 +940,12 @@ class GarminLiveTrackManager:
                     last_point=None,
                     trackpoint_count=0,
                     status=status,
-                    notification_started_sent=row.get("notification_started_sent", False),
-                    notification_ended_sent=row.get("notification_ended_sent", False),
                 )
                 self._prune_duplicate_waiting_sessions_for_user(session)
                 coord = LiveTrackSessionCoordinator(self, session)
+                coord.post_trackpoint_frequency_s = row.get("post_trackpoint_frequency_s")
+                coord.last_trackpoint_fetch = parse_garmin_datetime(row.get("last_trackpoint_fetch"))
+                coord.next_trackpoints_allowed_at = parse_garmin_datetime(row.get("next_trackpoints_allowed_at"))
                 self.sessions[sid] = coord
                 self.startup_debug[f"restored_session_{stable_session_hash(sid)}"] = session.identity.source.value
                 _LOGGER.debug(
@@ -831,9 +1004,6 @@ class GarminLiveTrackManager:
                         "last_seen": p.last_seen.isoformat() if p.last_seen else None,
                         "first_event_consumed": p.first_event_consumed,
                         "mode": p.mode,
-                        "enable_notifications": p.enable_notifications,
-                        "notify_service": p.notify_service,
-                        "ios_notification_style": p.ios_notification_style,
                         "allowed_activities": p.allowed_activities,
                     }
                     for name, p in self.known_users.items()
@@ -844,8 +1014,25 @@ class GarminLiveTrackManager:
     async def async_load_storage(self):
         raw = await self.store.async_load() or {}
         data = self._storage_payload(raw)
+        known_users_payload = data.get("known_users", {}) if isinstance(data.get("known_users"), dict) else {}
+        storage_changed = False
+        sanitized_known_users: dict[str, dict] = {}
+        for raw_name, value in known_users_payload.items():
+            if isinstance(value, dict):
+                clean_value = dict(value)
+                for legacy_key in LEGACY_NOTIFICATION_POLICY_KEYS:
+                    if legacy_key in clean_value:
+                        clean_value.pop(legacy_key, None)
+                        storage_changed = True
+                sanitized_known_users[raw_name] = clean_value
+            else:
+                sanitized_known_users[raw_name] = value
+        if storage_changed:
+            data["known_users"] = sanitized_known_users
+            await self.store.async_save(data)
+            _LOGGER.debug("Garmin LiveTrack migrated legacy notification fields out of stored user policies")
         known_users: dict[str, UserPolicy] = {}
-        for raw_name, value in data.get("known_users", {}).items():
+        for raw_name, value in sanitized_known_users.items():
             display_name = str(value.get("name", raw_name)).strip()
             key = self._user_key(display_name or raw_name)
             if not key:
@@ -857,9 +1044,6 @@ class GarminLiveTrackManager:
                 last_seen=parse_garmin_datetime(value.get("last_seen")),
                 first_event_consumed=value.get("first_event_consumed", False),
                 mode=value.get("mode", "normal"),
-                enable_notifications=value.get("enable_notifications"),
-                notify_service=value.get("notify_service"),
-                ios_notification_style=value.get("ios_notification_style"),
                 allowed_activities=self._normalize_allowed_activities(value.get("allowed_activities")),
             )
         self.known_users = known_users
@@ -867,15 +1051,6 @@ class GarminLiveTrackManager:
     async def async_reload_users(self):
         await self.async_load_storage()
         self._apply_option_user_policies()
-
-    async def async_send_test_notification(self):
-        if not self.options.get(CONF_ENABLE_NOTIFICATIONS, True):
-            return
-        target = self.options.get(CONF_NOTIFY_SERVICE, "notify.notify")
-        if "." not in target:
-            return
-        domain, service = target.split(".", 1)
-        await self.hass.services.async_call(domain, service, {"message": "Garmin LiveTrack test notification"}, blocking=False)
 
     async def async_refresh_session(self, session_id: str | None = None, session_id_hash: str | None = None) -> bool:
         target_sid = None
@@ -952,9 +1127,6 @@ class GarminLiveTrackManager:
         user: str,
         enabled: bool | None = None,
         mode: str | None = None,
-        enable_notifications: bool | None = None,
-        notify_service: str | None = None,
-        ios_notification_style: bool | None = None,
         allowed_activities=None,
     ) -> bool:
         name = (user or "").strip()
@@ -973,16 +1145,6 @@ class GarminLiveTrackManager:
             policy.enabled = bool(enabled)
         if mode in {"normal", "register_only", "one_event_only"}:
             policy.mode = mode
-        if enable_notifications is not None:
-            policy.enable_notifications = bool(enable_notifications)
-        if notify_service is not None:
-            cleaned_notify = str(notify_service).strip()
-            if cleaned_notify and "." not in cleaned_notify:
-                self.last_error = "invalid_notify_service"
-                return False
-            policy.notify_service = cleaned_notify or None
-        if ios_notification_style is not None:
-            policy.ios_notification_style = bool(ios_notification_style)
         normalized_allowed = self._normalize_allowed_activities(allowed_activities)
         if allowed_activities is not None:
             policy.allowed_activities = normalized_allowed
@@ -1015,17 +1177,8 @@ class GarminLiveTrackManager:
                     "first_event_consumed": policy.first_event_consumed,
                     "first_seen": policy.first_seen.isoformat() if policy.first_seen else None,
                     "last_seen": policy.last_seen.isoformat() if policy.last_seen else None,
-                    "enable_notifications": policy.enable_notifications,
-                    "notify_service": "configured" if policy.notify_service else None,
-                    "ios_notification_style": policy.ios_notification_style,
-                    "notification_policy_mode": self._notification_policy_mode(policy.name),
-                    "notify_service_policy_mode": self._notify_service_policy_mode(policy.name),
-                    "ios_notification_style_policy_mode": self._ios_notification_style_policy_mode(policy.name),
                     "allowed_activities": policy.allowed_activities,
                     "activity_policy_mode": self._activity_policy_mode(policy.name),
-                    "effective_enable_notifications": self._effective_notifications_enabled(policy.name),
-                    "effective_notify_service": self._effective_notify_service(policy.name),
-                    "effective_ios_notification_style": self._effective_ios_notification_style(policy.name),
                     "effective_activity_filter": self._effective_activity_filter(policy.name),
                 }
             )
@@ -1130,15 +1283,6 @@ class GarminLiveTrackManager:
             mode = row.get("mode")
             if mode in {"normal", "register_only", "one_event_only"}:
                 policy.mode = mode
-            if "enable_notifications" in row:
-                value = row.get("enable_notifications")
-                policy.enable_notifications = None if value is None else bool(value)
-            if "notify_service" in row:
-                notify_service = str(row.get("notify_service") or "").strip()
-                policy.notify_service = notify_service or None
-            if "ios_notification_style" in row:
-                value = row.get("ios_notification_style")
-                policy.ios_notification_style = None if value is None else bool(value)
             if "allowed_activities" in row:
                 policy.allowed_activities = self._normalize_allowed_activities(row.get("allowed_activities"))
             self._sync_allowed_user(policy.name)
@@ -1153,7 +1297,7 @@ class GarminLiveTrackManager:
             items = [str(part).strip().lower() for part in value]
         else:
             return None
-        allowed = [item for item in items if item in {"running", "walking", "cycling", "strength", "swimming", "other"}]
+        allowed = [item for item in items if item in {"running", "walking", "cycling", "strength", "swimming", "kayak", "rowing", "other"}]
         return sorted(set(allowed)) or None
 
     def _policy_for_user(self, user: str | None) -> UserPolicy | None:
@@ -1180,121 +1324,6 @@ class GarminLiveTrackManager:
         if policy and policy.allowed_activities is not None:
             return policy.allowed_activities
         return self.options.get(CONF_ACTIVITY_FILTER, "all")
-
-    def _notification_policy_mode(self, user: str | None) -> str:
-        policy = self._policy_for_user(user)
-        if policy and policy.enable_notifications is not None:
-            return "custom"
-        return "inherit_global"
-
-    def _notify_service_policy_mode(self, user: str | None) -> str:
-        policy = self._policy_for_user(user)
-        if policy and policy.notify_service:
-            return "custom"
-        return "inherit_global"
-
-    def _ios_notification_style_policy_mode(self, user: str | None) -> str:
-        policy = self._policy_for_user(user)
-        if policy and policy.ios_notification_style is not None:
-            return "custom"
-        return "inherit_global"
-
-    def _effective_notifications_enabled(self, user: str | None) -> bool:
-        policy = self._policy_for_user(user)
-        if policy and policy.enable_notifications is not None:
-            return bool(policy.enable_notifications)
-        return bool(self.options.get(CONF_ENABLE_NOTIFICATIONS, True))
-
-    def _effective_notify_service(self, user: str | None) -> str:
-        policy = self._policy_for_user(user)
-        if policy and policy.notify_service:
-            return policy.notify_service
-        return str(self.options.get(CONF_NOTIFY_SERVICE, "notify.notify"))
-
-    def _effective_ios_notification_style(self, user: str | None) -> bool:
-        policy = self._policy_for_user(user)
-        if policy and policy.ios_notification_style is not None:
-            return bool(policy.ios_notification_style)
-        return bool(self.options.get(CONF_IOS_NOTIFICATION_STYLE, False))
-
-    def _notification_context(self, session: LiveTrackSession, reason: str | None = None) -> dict[str, str]:
-        point = session.last_point
-        distance_km = (point.distance_m / 1000.0) if point and point.distance_m is not None else None
-        duration_min = (point.duration_s / 60.0) if point and point.duration_s is not None else None
-        return {
-            "user": session.garmin_user or "Unknown",
-            "activity": session.activity_type or "unknown",
-            "reason": _display_end_reason(reason),
-            "source": session.identity.source.value,
-            "url": session.identity.canonical_url,
-            "redacted_url": session.identity.redacted_url,
-            "session_id_hash": stable_session_hash(session.identity.session_id),
-            "distance_km": _format_float(distance_km, 2),
-            "duration_min": _format_float(duration_min, 1),
-        }
-
-    def _notification_message(
-        self,
-        session: LiveTrackSession,
-        *,
-        option_key: str,
-        default_template: str,
-        reason: str | None = None,
-    ) -> str:
-        template = str(self.options.get(option_key, default_template) or default_template).strip() or default_template
-        context = self._notification_context(session, reason)
-        try:
-            return template.format(**context)
-        except (KeyError, ValueError) as err:
-            _LOGGER.warning("Invalid Garmin LiveTrack notification template for %s: %s", option_key, err)
-            return default_template.format(**context)
-
-    async def async_notify_start(self, session: LiveTrackSession):
-        if not self._effective_notifications_enabled(session.garmin_user) or session.notification_started_sent:
-            return
-        target = self._effective_notify_service(session.garmin_user)
-        if "." not in target:
-            self.last_error = "invalid_notify_service"
-            return
-        domain, service = target.split(".", 1)
-        payload = {
-            "message": self._notification_message(
-                session,
-                option_key=CONF_NOTIFICATION_START_TEMPLATE,
-                default_template=DEFAULT_NOTIFICATION_START_TEMPLATE,
-            )
-        }
-        if self._effective_ios_notification_style(session.garmin_user) and session.last_point:
-            payload["data"] = {
-                "push": {"sound": {"name": "default", "critical": 0, "volume": 1.0}},
-                "url": "/lovelace",
-            }
-        await self.hass.services.async_call(domain, service, payload, blocking=False)
-        session.notification_started_sent = True
-
-    async def async_notify_end(self, session: LiveTrackSession, reason: str):
-        if not self._effective_notifications_enabled(session.garmin_user) or session.notification_ended_sent:
-            return
-        target = self._effective_notify_service(session.garmin_user)
-        if "." not in target:
-            self.last_error = "invalid_notify_service"
-            return
-        domain, service = target.split(".", 1)
-        payload = {
-            "message": self._notification_message(
-                session,
-                option_key=CONF_NOTIFICATION_END_TEMPLATE,
-                default_template=DEFAULT_NOTIFICATION_END_TEMPLATE,
-                reason=reason,
-            )
-        }
-        if self._effective_ios_notification_style(session.garmin_user):
-            payload["data"] = {
-                "push": {"sound": {"name": "default", "critical": 0, "volume": 1.0}},
-                "url": "/lovelace",
-            }
-        await self.hass.services.async_call(domain, service, payload, blocking=False)
-        session.notification_ended_sent = True
 
     def _prune_duplicate_waiting_sessions_for_user(self, new_session: LiveTrackSession) -> None:
         new_user = self._user_key(new_session.garmin_user)
@@ -1343,9 +1372,6 @@ class GarminLiveTrackManager:
         async def _reload(call):
             await self.async_reload_users()
 
-        async def _test(call):
-            await self.async_send_test_notification()
-
         async def _refresh_session(call):
             await self.async_refresh_session(
                 call.data.get("session_id"),
@@ -1363,9 +1389,6 @@ class GarminLiveTrackManager:
                 call.data.get("user", ""),
                 call.data.get("enabled"),
                 call.data.get("mode"),
-                call.data.get("enable_notifications"),
-                call.data.get("notify_service"),
-                call.data.get("ios_notification_style"),
                 call.data.get("allowed_activities"),
             )
 
@@ -1388,8 +1411,6 @@ class GarminLiveTrackManager:
             self.hass.services.async_register("garmin_livetrack", SERVICE_CLEAR_ENDED, _clear)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_RELOAD_USERS):
             self.hass.services.async_register("garmin_livetrack", SERVICE_RELOAD_USERS, _reload)
-        if not self.hass.services.has_service("garmin_livetrack", SERVICE_TEST_NOTIFICATION):
-            self.hass.services.async_register("garmin_livetrack", SERVICE_TEST_NOTIFICATION, _test)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_REFRESH_SESSION):
             self.hass.services.async_register("garmin_livetrack", SERVICE_REFRESH_SESSION, _refresh_session)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_REFRESH_ALL):

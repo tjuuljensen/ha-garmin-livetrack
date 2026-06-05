@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
 from homeassistant.helpers import aiohttp_client
@@ -34,6 +34,27 @@ class GarminFetchResult:
     page_status: int | None = None
     api_status: int | None = None
     csrf_found: bool = False
+
+
+@dataclass
+class GarminTrackpointResult:
+    ok: bool
+    trackpoints: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[LiveTrackError] = field(default_factory=list)
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    source: dict[str, Any] = field(default_factory=dict)
+    page_status: int | None = None
+    api_status: int | None = None
+    csrf_found: bool = False
+
+
+@dataclass
+class _PageContext:
+    html: str = ""
+    csrf: str | None = None
+    csrf_found: bool = False
+    page_status: int | None = None
+    errors: list[LiveTrackError] = field(default_factory=list)
 
 
 class GarminLiveTrackClient:
@@ -72,30 +93,28 @@ class GarminLiveTrackClient:
         return LiveTrackIdentity(session_id=session_id, token=token, canonical_url=canonical, redacted_url=redact_url(canonical), source=source)
 
     async def fetch(self, identity: LiveTrackIdentity) -> GarminFetchResult:
-        if self.session is None:
-            raise RuntimeError("HTTP session is not configured")
-        result = GarminFetchResult(ok=False, source={"session_id": identity.session_id})
-        page_html = ""
-        csrf = None
+        return await self.fetch_full(identity)
 
-        try:
-            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": self.user_agent}) as resp:
-                result.page_status = resp.status
-                if resp.status >= 400:
-                    result.errors.append(LiveTrackError("page_http_error", f"HTTP {resp.status}", datetime.now(UTC), True))
-                    return result
-                page_html = await resp.text()
-                m = CSRF_META_RE.search(page_html)
-                if m:
-                    csrf = m.group(1)
-                    result.csrf_found = True
-        except aiohttp.InvalidURL:
-            result.errors.append(LiveTrackError("page_url_error", "Invalid page URL", datetime.now(UTC), False))
-            return result
-        except aiohttp.ClientError as err:
-            result.errors.append(LiveTrackError("page_request_error", type(err).__name__, datetime.now(UTC), True))
-            return result
+    def _session_api_url(self, identity: LiveTrackIdentity) -> str:
+        return f"https://livetrack.garmin.com/api/sessions/{identity.session_id}?token={identity.token}"
 
+    def _coerce_begin(self, begin: datetime | str | None) -> str | None:
+        if begin is None:
+            return None
+        if isinstance(begin, datetime):
+            normalized = begin.astimezone(UTC).isoformat()
+            return normalized.replace("+00:00", "Z")
+        text = str(begin).strip()
+        return text or None
+
+    def _trackpoints_api_url(self, identity: LiveTrackIdentity, begin: datetime | str | None = None) -> str:
+        params = {"token": identity.token}
+        begin_value = self._coerce_begin(begin)
+        if begin_value:
+            params["begin"] = begin_value
+        return f"https://livetrack.garmin.com/api/sessions/{identity.session_id}/track-points/common?{urlencode(params)}"
+
+    def _api_headers(self, identity: LiveTrackIdentity, csrf: str | None) -> dict[str, str]:
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -103,29 +122,191 @@ class GarminLiveTrackClient:
         }
         if csrf:
             headers["Livetrack-Csrf-Token"] = csrf
+        return headers
 
-        payload: Any = {}
-        api_url = f"https://livetrack.garmin.com/api/sessions/{identity.session_id}?token={identity.token}"
+    async def _fetch_page_context(self, identity: LiveTrackIdentity) -> _PageContext:
+        if self.session is None:
+            raise RuntimeError("HTTP session is not configured")
+        context = _PageContext()
         try:
-            async with self.session.get(api_url, timeout=self.request_timeout, headers=headers) as resp:
-                result.api_status = resp.status
+            async with self.session.get(identity.canonical_url, timeout=self.request_timeout, headers={"User-Agent": self.user_agent}) as resp:
+                context.page_status = resp.status
                 if resp.status >= 400:
-                    result.errors.append(LiveTrackError("session_http_error", f"HTTP {resp.status}", datetime.now(UTC), True))
-                else:
-                    payload = await resp.json(content_type=None)
+                    context.errors.append(LiveTrackError("page_http_error", f"HTTP {resp.status}", datetime.now(UTC), True))
+                    return context
+                context.html = await resp.text()
+                m = CSRF_META_RE.search(context.html)
+                if m:
+                    context.csrf = m.group(1)
+                    context.csrf_found = True
         except aiohttp.InvalidURL:
-            result.errors.append(LiveTrackError("session_url_error", "Invalid session API URL", datetime.now(UTC), False))
+            context.errors.append(LiveTrackError("page_url_error", "Invalid page URL", datetime.now(UTC), False))
+            return context
         except aiohttp.ClientError as err:
-            result.errors.append(LiveTrackError("session_request_error", type(err).__name__, datetime.now(UTC), True))
-        except json.JSONDecodeError:
-            result.errors.append(LiveTrackError("malformed_response", "Invalid JSON", datetime.now(UTC), True))
+            context.errors.append(LiveTrackError("page_request_error", type(err).__name__, datetime.now(UTC), True))
+            return context
+        return context
 
-        normalized = self.normalize_payload(payload, page_html, identity.session_id)
-        normalized.page_status = result.page_status
-        normalized.api_status = result.api_status
-        normalized.csrf_found = result.csrf_found
-        normalized.errors = result.errors + normalized.errors
+    async def _fetch_with_csrf_retry(
+        self,
+        identity: LiveTrackIdentity,
+        url: str,
+        error_prefix: str,
+        page_context: _PageContext | None = None,
+    ) -> tuple[Any, _PageContext, int | None, list[LiveTrackError]]:
+        context = page_context or await self._fetch_page_context(identity)
+        errors = list(context.errors)
+        if context.errors:
+            return {}, context, None, errors
+
+        for attempt in range(2):
+            try:
+                async with self.session.get(
+                    url,
+                    timeout=self.request_timeout,
+                    headers=self._api_headers(identity, context.csrf),
+                ) as resp:
+                    status = resp.status
+                    if status == 403 and attempt == 0:
+                        context = await self._fetch_page_context(identity)
+                        errors.extend(context.errors)
+                        if context.errors:
+                            return {}, context, status, errors
+                        continue
+                    if status >= 400:
+                        errors.append(LiveTrackError(f"{error_prefix}_http_error", f"HTTP {status}", datetime.now(UTC), True))
+                        return {}, context, status, errors
+                    return await resp.json(content_type=None), context, status, errors
+            except aiohttp.InvalidURL:
+                errors.append(LiveTrackError(f"{error_prefix}_url_error", "Invalid session API URL", datetime.now(UTC), False))
+                return {}, context, None, errors
+            except aiohttp.ClientError as err:
+                errors.append(LiveTrackError(f"{error_prefix}_request_error", type(err).__name__, datetime.now(UTC), True))
+                return {}, context, None, errors
+            except json.JSONDecodeError:
+                errors.append(LiveTrackError("malformed_response", "Invalid JSON", datetime.now(UTC), True))
+                return {}, context, status, errors
+        return {}, context, None, errors
+
+    async def fetch_session(self, identity: LiveTrackIdentity) -> GarminFetchResult:
+        page_context = await self._fetch_page_context(identity)
+        payload, context, api_status, errors = await self._fetch_with_csrf_retry(
+            identity,
+            self._session_api_url(identity),
+            "session",
+            page_context=page_context,
+        )
+        session_obj = self._find_session(payload, identity.session_id)
+        result = GarminFetchResult(
+            ok=bool(session_obj),
+            session=session_obj or {},
+            errors=errors,
+            source={"session_source": "api_or_payload" if session_obj else "none", "trackpoints_source": "none"},
+            page_status=context.page_status,
+            api_status=api_status,
+            csrf_found=context.csrf_found,
+        )
+        if not session_obj:
+            result.errors.append(LiveTrackError("missing_session", "Could not find session", datetime.now(UTC), True))
+        return result
+
+    async def fetch_trackpoints(
+        self,
+        identity: LiveTrackIdentity,
+        begin: datetime | str | None = None,
+    ) -> GarminTrackpointResult:
+        page_context = await self._fetch_page_context(identity)
+        payload, context, api_status, errors = await self._fetch_with_csrf_retry(
+            identity,
+            self._trackpoints_api_url(identity, begin),
+            "trackpoints",
+            page_context=page_context,
+        )
+        points = self._find_trackpoints(payload)
+        result = GarminTrackpointResult(
+            ok=bool(points),
+            trackpoints=points,
+            errors=errors,
+            source={"trackpoints_source": "trackpoints_common" if points else "none"},
+            page_status=context.page_status,
+            api_status=api_status,
+            csrf_found=context.csrf_found,
+        )
+        if not points:
+            result.errors.append(LiveTrackError("missing_trackpoints", "No trackpoints", datetime.now(UTC), True))
+        return result
+
+    async def fetch_legacy_full(self, identity: LiveTrackIdentity) -> GarminFetchResult:
+        page_context = await self._fetch_page_context(identity)
+        if page_context.errors:
+            return GarminFetchResult(
+                ok=False,
+                errors=list(page_context.errors),
+                source={"session_id": identity.session_id},
+                page_status=page_context.page_status,
+                csrf_found=page_context.csrf_found,
+            )
+        session_payload, page_context, session_status, session_errors = await self._fetch_with_csrf_retry(
+            identity,
+            self._session_api_url(identity),
+            "session",
+            page_context=page_context,
+        )
+        normalized = self.normalize_payload(session_payload, page_context.html, identity.session_id)
+        normalized.page_status = page_context.page_status
+        normalized.api_status = session_status
+        normalized.csrf_found = page_context.csrf_found
+        normalized.errors = session_errors + normalized.errors
         return normalized
+
+    async def fetch_full(self, identity: LiveTrackIdentity) -> GarminFetchResult:
+        page_context = await self._fetch_page_context(identity)
+        if page_context.errors:
+            return GarminFetchResult(
+                ok=False,
+                errors=list(page_context.errors),
+                source={"session_id": identity.session_id},
+                page_status=page_context.page_status,
+                csrf_found=page_context.csrf_found,
+            )
+
+        session_payload, page_context, session_status, session_errors = await self._fetch_with_csrf_retry(
+            identity,
+            self._session_api_url(identity),
+            "session",
+            page_context=page_context,
+        )
+        trackpoint_payload, page_context, trackpoint_status, trackpoint_errors = await self._fetch_with_csrf_retry(
+            identity,
+            self._trackpoints_api_url(identity),
+            "trackpoints",
+            page_context=page_context,
+        )
+        session_obj = self._find_session(session_payload, identity.session_id)
+        trackpoints = self._find_trackpoints(trackpoint_payload)
+        if session_obj and trackpoints:
+            return GarminFetchResult(
+                ok=True,
+                session=session_obj,
+                trackpoints=trackpoints,
+                last_trackpoint=trackpoints[-1],
+                trackpoint_count=len(trackpoints),
+                errors=session_errors + trackpoint_errors,
+                source={
+                    "session_source": "api_or_payload",
+                    "trackpoints_source": "trackpoints_common",
+                },
+                page_status=page_context.page_status,
+                api_status=trackpoint_status or session_status,
+                csrf_found=page_context.csrf_found,
+            )
+
+        legacy = self.normalize_payload(session_payload, page_context.html, identity.session_id)
+        legacy.page_status = page_context.page_status
+        legacy.api_status = session_status
+        legacy.csrf_found = page_context.csrf_found
+        legacy.errors = session_errors + trackpoint_errors + legacy.errors
+        return legacy
 
     def normalize_payload(self, session_payload: Any, page_html: str, session_id: str) -> GarminFetchResult:
         result = GarminFetchResult(ok=False, source={"trackpoints_source": "none", "session_source": "none"})

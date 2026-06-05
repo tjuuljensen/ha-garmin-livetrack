@@ -2,18 +2,18 @@ import pytest
 from datetime import UTC, datetime, timedelta
 import re
 
+from custom_components.garmin_livetrack.client import GarminFetchResult, GarminTrackpointResult
 from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager, LiveTrackSessionCoordinator
 from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBinarySensor
-from custom_components.garmin_livetrack.const import (
-    DEFAULT_NOTIFICATION_END_TEMPLATE,
-    DEFAULT_NOTIFICATION_START_TEMPLATE,
-)
+from custom_components.garmin_livetrack.const import EVENT_POINT_RECEIVED
+from custom_components.garmin_livetrack.icons import activity_icon
 from custom_components.garmin_livetrack.models import (
     LiveTrackIdentity,
     LiveTrackPoint,
     LiveTrackSession,
     LiveTrackSource,
     LiveTrackStatus,
+    normalize_activity,
 )
 from custom_components.garmin_livetrack.sensor import GarminUserStatusSensor
 
@@ -89,6 +89,41 @@ class SequenceFetch:
         self.api_status = 200
 
 
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("Running", "running"),
+        ("RUNNING", "running"),
+        ("Trail Running", "running"),
+        ("Mountain Biking", "cycling"),
+        ("kayaking", "kayak"),
+        ("canoe", "kayak"),
+        ("rowing", "rowing"),
+        ("unknown_activity", "unknown_activity"),
+        (None, "other"),
+    ],
+)
+def test_normalize_activity_aliases(raw_value, expected):
+    assert normalize_activity(raw_value) == expected
+
+
+@pytest.mark.parametrize(
+    ("activity", "is_active", "expected_icon"),
+    [
+        ("running", True, "mdi:run-fast"),
+        ("running", False, "mdi:run"),
+        ("cycling", True, "mdi:bike-fast"),
+        ("cycling", False, "mdi:bike"),
+        ("kayak", True, "mdi:kayaking"),
+        ("kayak", False, "mdi:kayaking"),
+        ("rowing", True, "mdi:rowing"),
+        ("unknown_activity", True, "mdi:map-marker-path"),
+    ],
+)
+def test_activity_icon_mapping(activity, is_active, expected_icon):
+    assert activity_icon(activity, is_active) == expected_icon
+
+
 class SequenceClient:
     def __init__(self, fetches):
         self._fetches = list(fetches)
@@ -97,6 +132,34 @@ class SequenceClient:
         if not self._fetches:
             raise AssertionError("No more fetches configured")
         return self._fetches.pop(0)
+
+
+class AdaptiveClient:
+    def __init__(self, session_fetches, trackpoint_fetches, legacy_fetches=None):
+        self._session_fetches = list(session_fetches)
+        self._trackpoint_fetches = list(trackpoint_fetches)
+        self._legacy_fetches = list(legacy_fetches or [])
+        self.trackpoint_calls = []
+        self.user_agent = None
+
+    async def fetch(self, identity):
+        raise AssertionError("Adaptive mode should not call fetch() directly")
+
+    async def fetch_session(self, identity):
+        if not self._session_fetches:
+            raise AssertionError("No more session fetches configured")
+        return self._session_fetches.pop(0)
+
+    async def fetch_trackpoints(self, identity, begin=None):
+        self.trackpoint_calls.append(begin)
+        if not self._trackpoint_fetches:
+            raise AssertionError("No more trackpoint fetches configured")
+        return self._trackpoint_fetches.pop(0)
+
+    async def fetch_legacy_full(self, identity):
+        if not self._legacy_fetches:
+            raise AssertionError("No legacy fetch configured")
+        return self._legacy_fetches.pop(0)
 
 
 @pytest.mark.asyncio
@@ -127,6 +190,32 @@ async def test_configured_user_agent_is_applied_to_client(hass):
     m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {"user_agent": "CustomUA/2.0"})
     await m.async_setup()
     assert m.client.user_agent == "CustomUA/2.0"
+
+
+@pytest.mark.asyncio
+async def test_storage_user_policy_migration_drops_notification_fields(hass):
+    store = DummyStore()
+    store.data = {
+        "known_users": {
+            "runner": {
+                "name": "Runner",
+                "enabled": True,
+                "mode": "normal",
+                "enable_notifications": True,
+                "notify_service": "notify.mobile_app_phone",
+                "ios_notification_style": True,
+                "allowed_activities": ["running"],
+            }
+        }
+    }
+    m = GarminLiveTrackManager(hass, DummyClient(), store, {})
+    await m.async_setup()
+
+    assert "runner" in m.known_users
+    assert m.known_users["runner"].allowed_activities == ["running"]
+    assert "enable_notifications" not in store.data["known_users"]["runner"]
+    assert "notify_service" not in store.data["known_users"]["runner"]
+    assert "ios_notification_style" not in store.data["known_users"]["runner"]
 
 
 @pytest.mark.asyncio
@@ -245,6 +334,7 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
         identity=identity,
         garmin_user="Runner",
         activity_type="running",
+        activity_type_raw="Trail Running",
         start=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
         expected_end=datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
         actual_end=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
@@ -259,6 +349,7 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
             altitude_m=42,
             heart_rate_bpm=150,
             power_w=220,
+            cadence=88,
         ),
         trackpoint_count=123,
         status=LiveTrackStatus.ENDED,
@@ -271,9 +362,16 @@ async def test_user_status_sensor_retains_ended_session_summary(hass):
     attrs = entity.extra_state_attributes
     assert attrs["garmin_user"] == "Runner"
     assert attrs["activity"] == "running"
+    assert attrs["activity_type_raw"] == "Trail Running"
     assert attrs["source"] == "service"
     assert attrs["distance_km"] == 12.345
     assert attrs["duration_min"] == 60.0
+    assert attrs["duration_hms"] == "01:00:00"
+    assert attrs["speed_mps"] == 3.5
+    assert attrs["speed_kmh"] == 12.6
+    assert attrs["pace_min_km"] == 4.76
+    assert attrs["cadence"] == 88
+    assert attrs["has_location"] is False
     assert attrs["heart_rate_bpm"] == 150
     assert attrs["activity_icon"] == "mdi:run"
     assert attrs["status_icon"] == "mdi:check-circle-outline"
@@ -313,8 +411,6 @@ async def test_ended_session_summary_persists_across_restore(hass):
         trackpoint_count=42,
         status=LiveTrackStatus.ENDED,
         end_reason="inactive_no_end",
-        notification_started_sent=True,
-        notification_ended_sent=True,
     )
     first.ended_sessions["ended-persist"] = session
     await first.async_save_storage()
@@ -372,123 +468,157 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
     assert attrs["active_activities"] == ["running"]
     assert attrs["active_summaries"][0]["status"] == "active"
     assert attrs["active_summaries"][0]["source"] == "service"
+    assert attrs["active_summaries"][0]["activity_type"] == "running"
+    assert attrs["active_summaries"][0]["activity_type_raw"] == "running"
+    assert attrs["active_summaries"][0]["activity_icon"] == "mdi:run-fast"
 
 
 @pytest.mark.asyncio
-async def test_notification_start_template_formats_message(hass):
+async def test_adaptive_fast_mode_skips_trackpoint_fetch_before_next_allowed_time(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    client = AdaptiveClient(
+        session_fetches=[
+            GarminFetchResult(
+                ok=True,
+                session={
+                    "sessionId": "adaptive-1",
+                    "userDisplayName": "Runner",
+                    "activityType": "kayaking",
+                    "postTrackPointFrequency": 10,
+                },
+                fetched_at=base,
+                source={"session_source": "api_or_payload"},
+            ),
+            GarminFetchResult(
+                ok=True,
+                session={
+                    "sessionId": "adaptive-1",
+                    "userDisplayName": "Runner",
+                    "activityType": "kayaking",
+                    "postTrackPointFrequency": 10,
+                },
+                fetched_at=base + timedelta(seconds=5),
+                source={"session_source": "api_or_payload"},
+            ),
+        ],
+        trackpoint_fetches=[
+            GarminTrackpointResult(
+                ok=True,
+                trackpoints=[
+                    {
+                        "dateTime": "2026-01-01T10:00:00Z",
+                        "position": {"lat": 55.67, "lon": 12.56},
+                        "speed": 2.5,
+                        "distance": 500,
+                        "duration": 120,
+                        "cadence": 60,
+                    }
+                ],
+                fetched_at=base,
+                source={"trackpoints_source": "trackpoints_common"},
+            )
+        ],
+    )
     m = GarminLiveTrackManager(
         hass,
-        DummyClient(),
+        client,
         DummyStore(),
-        {
-            "enable_notifications": True,
-            "notify_service": "notify.notify",
-            "notification_start_template": "START {user} {activity} via {source} {session_id_hash}",
-        },
+        {"update_profile": "adaptive_fast", "update_interval_seconds": 60},
     )
     await m.async_setup()
-    await m.async_add_url("https://livetrack.garmin.com/session/abc/token/def", LiveTrackSource.SERVICE)
+    identity = LiveTrackIdentity("adaptive-1", "token", "https://livetrack.garmin.com/session/adaptive-1/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
 
-    assert hass.services.calls
-    call = hass.services.calls[-1]
-    assert call["domain"] == "notify"
-    assert call["service"] == "notify"
-    assert call["payload"]["message"].startswith("START Runner running via service ")
+    await coord._refresh_once()
+    assert client.trackpoint_calls == [None]
+    assert coord.post_trackpoint_frequency_s == 10
+    assert coord.next_trackpoints_allowed_at == base + timedelta(seconds=12)
+
+    await coord._refresh_once()
+    assert client.trackpoint_calls == [None]
+    assert coord.session.activity_type == "kayak"
+    assert coord.session.activity_type_raw == "kayaking"
 
 
 @pytest.mark.asyncio
-async def test_notification_end_template_formats_message(hass):
+async def test_point_received_event_fires_only_for_new_points(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    client = AdaptiveClient(
+        session_fetches=[
+            GarminFetchResult(
+                ok=True,
+                session={
+                    "sessionId": "adaptive-2",
+                    "userDisplayName": "Runner",
+                    "activityType": "Trail Running",
+                    "postTrackPointFrequency": 10,
+                },
+                fetched_at=base,
+                source={"session_source": "api_or_payload"},
+            ),
+            GarminFetchResult(
+                ok=True,
+                session={
+                    "sessionId": "adaptive-2",
+                    "userDisplayName": "Runner",
+                    "activityType": "Trail Running",
+                    "postTrackPointFrequency": 10,
+                },
+                fetched_at=base + timedelta(seconds=20),
+                source={"session_source": "api_or_payload"},
+            ),
+        ],
+        trackpoint_fetches=[
+            GarminTrackpointResult(
+                ok=True,
+                trackpoints=[
+                    {
+                        "dateTime": "2026-01-01T10:00:00Z",
+                        "position": {"lat": 55.67, "lon": 12.56},
+                        "speed": 3.0,
+                        "distance": 1000,
+                        "duration": 300,
+                        "heartRate": 150,
+                    }
+                ],
+                fetched_at=base,
+                source={"trackpoints_source": "trackpoints_common"},
+            ),
+            GarminTrackpointResult(
+                ok=True,
+                trackpoints=[],
+                fetched_at=base + timedelta(seconds=20),
+                source={"trackpoints_source": "trackpoints_common"},
+            ),
+        ],
+    )
     m = GarminLiveTrackManager(
         hass,
-        DummyClient(),
+        client,
         DummyStore(),
-        {
-            "enable_notifications": True,
-            "notify_service": "notify.notify",
-            "notification_end_template": "END {user} {activity} {reason} {distance_km} {duration_min}",
-        },
+        {"update_profile": "adaptive_fast", "update_interval_seconds": 60},
     )
     await m.async_setup()
-    identity = LiveTrackIdentity(
-        "ended-session",
-        "token",
-        "https://livetrack.garmin.com/session/ended-session/token/token",
-        "https://livetrack.garmin.com/session/ended-session/token/t...n",
-        LiveTrackSource.SERVICE,
-    )
-    session = LiveTrackSession(
-        identity=identity,
-        garmin_user="Runner",
-        activity_type="running",
-        start=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
-        expected_end=datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
-        actual_end=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
-        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
-        last_fetch=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
-        last_success=datetime(2026, 1, 1, 11, 5, tzinfo=UTC),
-        last_point=LiveTrackPoint(
-            timestamp=datetime(2026, 1, 1, 11, 4, tzinfo=UTC),
-            distance_m=12345,
-            duration_s=3600,
-        ),
-        trackpoint_count=123,
-        status=LiveTrackStatus.ACTIVE,
-    )
+    identity = LiveTrackIdentity("adaptive-2", "token", "https://livetrack.garmin.com/session/adaptive-2/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
 
-    await m.async_notify_end(session, "inactive_no_end")
-    call = hass.services.calls[-1]
-    assert call["payload"]["message"] == "END Runner running inactive without Garmin END 12.35 60.0"
+    await coord._refresh_once()
+    await coord._refresh_once()
 
-
-@pytest.mark.asyncio
-async def test_invalid_notification_template_falls_back_to_default(hass):
-    m = GarminLiveTrackManager(
-        hass,
-        DummyClient(),
-        DummyStore(),
-        {
-            "enable_notifications": True,
-            "notify_service": "notify.notify",
-            "notification_start_template": "START {missing}",
-            "notification_end_template": "END {missing}",
-        },
-    )
-    await m.async_setup()
-    await m.async_add_url("https://livetrack.garmin.com/session/abc/token/def", LiveTrackSource.SERVICE)
-    start_call = hass.services.calls[-1]
-    assert start_call["payload"]["message"] == DEFAULT_NOTIFICATION_START_TEMPLATE.format(
-        user="Runner",
-        activity="running",
-    )
-
-    identity = LiveTrackIdentity(
-        "ended-session",
-        "token",
-        "https://livetrack.garmin.com/session/ended-session/token/token",
-        "https://livetrack.garmin.com/session/ended-session/token/t...n",
-        LiveTrackSource.SERVICE,
-    )
-    session = LiveTrackSession(
-        identity=identity,
-        garmin_user="Runner",
-        activity_type="running",
-        start=None,
-        expected_end=None,
-        actual_end=None,
-        first_seen=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
-        last_fetch=None,
-        last_success=None,
-        last_point=None,
-        trackpoint_count=0,
-        status=LiveTrackStatus.ACTIVE,
-    )
-    await m.async_notify_end(session, "session_end")
-    end_call = hass.services.calls[-1]
-    assert end_call["payload"]["message"] == DEFAULT_NOTIFICATION_END_TEMPLATE.format(
-        user="Runner",
-        activity="running",
-        reason="Garmin session end",
-    )
+    point_events = [event for event in hass.bus.fired if event["event_type"] == EVENT_POINT_RECEIVED]
+    assert len(point_events) == 1
+    payload = point_events[0]["event_data"]
+    assert payload["activity_type"] == "running"
+    assert payload["activity_type_raw"] == "Trail Running"
+    assert payload["activity_icon"] == "mdi:run-fast"
+    assert payload["source"] == "service"
+    assert payload["speed_kmh"] == 10.8
+    assert payload["pace_min_km"] == 5.56
+    assert payload["distance_km"] == 1.0
+    assert payload["duration_hms"] == "00:05:00"
+    assert "token" not in payload
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,13 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .coordinator import ACTIVE_STATES
 from .icons import activity_icon
-from .models import stable_session_hash
+from .models import (
+    distance_km_from_m,
+    duration_hms_from_seconds,
+    pace_min_km_from_speed_mps,
+    speed_kmh_from_mps,
+    stable_session_hash,
+)
 from .sensor import _device_info, _discover_entity_keys, _entity_label, _integration_device_info, _select_session_for_user
 
 
@@ -70,9 +76,16 @@ class GarminAnyActiveBinarySensor(_BaseBinary):
             {
                 "user": c.session.garmin_user or f"session:{stable_session_hash(c.session.identity.session_id)[:8]}",
                 "activity": c.session.activity_type or "other",
+                "activity_type": c.session.activity_type or "other",
+                "activity_type_raw": c.session.activity_type_raw,
+                "activity_icon": activity_icon(c.session.activity_type, True),
                 "status": c.session.status.value,
                 "source": c.session.identity.source.value,
                 "session_id_hash": stable_session_hash(c.session.identity.session_id),
+                "speed_kmh": speed_kmh_from_mps(c.session.last_point.speed_mps) if c.session.last_point else None,
+                "pace_min_km": pace_min_km_from_speed_mps(c.session.last_point.speed_mps) if c.session.last_point else None,
+                "distance_km": distance_km_from_m(c.session.last_point.distance_m) if c.session.last_point else None,
+                "duration_hms": duration_hms_from_seconds(c.session.last_point.duration_s) if c.session.last_point else None,
             }
             for c in active
         ]

@@ -24,9 +24,6 @@ clear_ended:
 reload_users:
   name: Reload Users
   description: Reload known users from storage.
-test_notification:
-  name: Test Notification
-  description: Send a test notification.
 refresh_session:
   name: Refresh Session
   description: Force an immediate refresh for one active session.
@@ -47,7 +44,7 @@ cleanup_legacy_entities:
   description: Remove orphaned legacy Garmin LiveTrack entities no longer provided by this integration.
 set_user_policy:
   name: Set User Policy
-  description: Update user tracking policy, notification routing, and activity overrides.
+  description: Update user tracking policy and activity overrides.
   fields:
     user:
       required: true
@@ -65,18 +62,6 @@ set_user_policy:
             - normal
             - register_only
             - one_event_only
-    enable_notifications:
-      required: false
-      selector:
-        boolean:
-    notify_service:
-      required: false
-      selector:
-        text:
-    ios_notification_style:
-      required: false
-      selector:
-        boolean:
     allowed_activities:
       required: false
       selector:

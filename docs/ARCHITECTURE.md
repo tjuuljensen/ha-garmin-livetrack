@@ -11,7 +11,8 @@ The integration provides:
 - independent tracking of one or more sessions
 - stable per-user entities
 - restart recovery
-- notification routing and message rendering
+- Home Assistant events for automation/package consumers
+- layered Garmin fetch with dedicated incremental trackpoint polling
 - diagnostics and repair signaling
 
 ## Architectural Model
@@ -30,7 +31,6 @@ The integration is designed as one Home Assistant config entry that manages:
 - service registration
 - IMAP listener registration
 - storage load/save
-- notification routing
 - shape-change repair signaling
 
 ### Session ownership
@@ -49,6 +49,7 @@ Responsibilities:
 - fetch Garmin page first
 - extract CSRF when present
 - call Garmin session API
+- call Garmin's dedicated incremental trackpoint endpoint
 - fall back to hydration payloads
 - normalize session and trackpoint results
 - return structured redacted errors
@@ -59,7 +60,6 @@ Responsibilities:
 - per-session polling
 - startup recovery
 - user policy enforcement
-- notification routing
 - retained ended-session handling
 - repair-signal synchronization
 
@@ -126,18 +126,12 @@ Per-user status sensors continue to present the latest ended-session data during
 ## User Policy Model
 ### Global defaults
 Global settings define the default behavior for:
-- notifications
-- notify target
-- iOS-style notification payload
 - activity filter
 
 ### Per-user overrides
 Per-user policy can override:
 - tracking enabled
 - handling mode
-- notification enablement
-- notify target
-- iOS-style payload behavior
 - activity filter
 
 ### Unknown-user handling
@@ -150,44 +144,41 @@ Supported paths:
 - register only and reject tracking
 - allow one event and require later explicit enablement
 
-## Notifications
-### Routing
-Notification routing resolves in this order:
-1. per-user override
-2. global default
+## Notification Boundary
+The integration does not send notifications directly.
 
-### Message rendering
-Start and end notification text comes from configurable global templates.
-
-Supported placeholders include:
-- `user`
-- `activity`
-- `reason`
-- `source`
-- `url`
-- `redacted_url`
-- `session_id_hash`
-- `distance_km`
-- `duration_min`
-
-If a template is invalid, the integration falls back to the default message and logs a warning.
+It emits Home Assistant events and exposes entities, device trackers, and services.
+Automations, scripts, blueprints, or YAML packages are responsible for turning those signals into notifications.
 
 ## Garmin Fetch Strategy
 ### Request pattern
 The request pattern is:
 1. fetch public LiveTrack page
 2. capture cookies and possible CSRF
-3. request Garmin session API
-4. inspect hydration payloads if necessary
+3. request Garmin session API for metadata
+4. request Garmin incremental trackpoints
+5. inspect payload and hydration fallbacks if necessary
+
+### CSRF retry behavior
+If Garmin responds with HTTP 403 from the session API or the incremental trackpoint endpoint, the client refreshes the public page once to refresh cookies/CSRF and retries exactly once before returning a structured error.
 
 ### Trackpoint extraction
-The parser searches for trackpoint-like content across likely data branches instead of depending on one fixed JSON path.
+The dedicated incremental endpoint is the preferred source for trackpoints. The parser fallback searches for trackpoint-like content across likely data branches instead of depending on one fixed JSON path.
 
 This includes:
 - API arrays such as `trackPoints`, `trackpoints`, or `points`
 - Next.js `__NEXT_DATA__`
 - hydration or app-router payloads
 - nested point-like arrays
+
+### Adaptive fast mode
+When the update profile is `adaptive_fast`, the coordinator:
+- tracks Garmin `postTrackPointFrequency`
+- computes `next_trackpoints_allowed_at`
+- skips incremental trackpoint requests until Garmin is likely to have published a new point
+- falls back to the configured update interval when Garmin does not provide a usable publishing frequency
+
+This mode still preserves the existing lifecycle layer for stale/finalization/end inference.
 
 ## Diagnostics And Repairs
 ### Diagnostics
@@ -234,10 +225,8 @@ The following decisions are currently intentional and closed:
 ## Remaining Work
 ### High-value remaining tests
 - options-flow tests for user-policy editing
-- per-user notification routing/fallback tests
 - additional no-END discarded-activity coverage
 - shape-change repair-signal transition tests
-- configurable User-Agent tests
 
 ### Entity-registry cleanup
 - keep `garmin_livetrack.cleanup_legacy_entities` as an optional stale-registry cleanup tool
