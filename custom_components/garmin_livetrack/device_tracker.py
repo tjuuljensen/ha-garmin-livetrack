@@ -52,7 +52,7 @@ class GarminUserTracker(TrackerEntity):
     @property
     def name(self):
         coord = _select_session_for_user(self.manager, self.entity_key)
-        return f"Garmin LiveTrack {_entity_label(self.entity_key, coord)}"
+        return _entity_label(self.entity_key, coord)
 
     @property
     def device_info(self):

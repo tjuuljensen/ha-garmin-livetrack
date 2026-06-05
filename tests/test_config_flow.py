@@ -204,7 +204,9 @@ async def test_options_flow_remove_user_removes_options_and_calls_manager(hass):
     manager = _Manager()
 
     class _RuntimeData:
-        manager = manager
+        pass
+
+    _RuntimeData.manager = manager
 
     class _FakeConfigEntry:
         data = {}
