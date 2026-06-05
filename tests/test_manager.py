@@ -949,3 +949,31 @@ async def test_server_error_backoff_and_debug_attributes(hass):
     await coord._refresh_once()
     assert coord.consecutive_http_failures == 0
     assert coord.backoff_until is None
+
+
+@pytest.mark.asyncio
+async def test_strict_true_allows_user_from_allowed_users_registry(hass):
+    m = GarminLiveTrackManager(
+        hass,
+        UrlAwareDummyClient(),
+        DummyStore(),
+        {
+            "strict_users": True,
+            "accept_first_seen_users": False,
+            "allowed_users": ["Runner"],
+        },
+    )
+    await m.async_setup()
+
+    assert "runner" in m.known_users
+    assert m.known_users["runner"].enabled is True
+    assert m.known_users["runner"].mode == "normal"
+
+    result = await m.async_add_url(
+        "https://livetrack.garmin.com/session/session-allowed/token/token-allowed",
+        LiveTrackSource.SERVICE,
+    )
+
+    assert result.ok is True
+    assert result.status in {LiveTrackStatus.ACTIVE, LiveTrackStatus.WAITING_FOR_TRACKPOINT}
+    assert "session-allowed" in m.sessions

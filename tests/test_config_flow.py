@@ -9,6 +9,11 @@ def test_normalize_allowed_users():
     assert out["allowed_users"] == ["alice", "bob"]
 
 
+def test_normalize_allowed_users_list():
+    out = _normalize({"allowed_users": ["alice", " bob ", ""]}, include_users=True)
+    assert out["allowed_users"] == ["alice", "bob"]
+
+
 def test_normalize_empty_user_agent_reverts_to_default():
     out = _normalize(
         {
@@ -163,3 +168,85 @@ async def test_options_flow_edit_user_takes_priority_over_advanced_profile(hass)
 
     assert result["type"] == "form"
     assert result["step_id"] == "user_policy"
+
+
+def test_known_users_includes_runtime_manager_users():
+    class _Policy:
+        name = "Runner"
+
+    class _Manager:
+        known_users = {"runner": _Policy()}
+
+    class _RuntimeData:
+        manager = _Manager()
+
+    class _FakeConfigEntry:
+        data = {}
+        options = {}
+        runtime_data = _RuntimeData()
+
+    flow = GarminLiveTrackOptionsFlow(_FakeConfigEntry())
+
+    assert flow._known_users() == ["Runner"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_remove_user_removes_options_and_calls_manager(hass):
+    class _Manager:
+        def __init__(self):
+            self.removed = []
+            self.known_users = {}
+
+        async def async_remove_user(self, user):
+            self.removed.append(user)
+            return True
+
+    manager = _Manager()
+
+    class _RuntimeData:
+        manager = manager
+
+    class _FakeConfigEntry:
+        data = {}
+        options = {
+            "allowed_users": ["Runner", "Other"],
+            "user_policies": {
+                "Runner": {
+                    "name": "Runner",
+                    "enabled": True,
+                    "mode": "normal",
+                },
+                "Other": {
+                    "name": "Other",
+                    "enabled": True,
+                    "mode": "normal",
+                },
+            },
+        }
+        runtime_data = _RuntimeData()
+
+    flow = GarminLiveTrackOptionsFlow(_FakeConfigEntry())
+    flow.hass = hass
+    flow._pending_options = dict(_FakeConfigEntry.options)
+    flow._selected_user = "Runner"
+
+    result = await flow.async_step_user_policy(
+        {
+            "user_action": "remove",
+            "enabled": True,
+            "mode": "normal",
+            "user_activity_mode": "inherit_global",
+            "allowed_activities": [],
+        }
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"]["allowed_users"] == ["Other"]
+    assert result["data"]["user_policies"] == {
+        "Other": {
+            "name": "Other",
+            "enabled": True,
+            "mode": "normal",
+        }
+    }
+    assert manager.removed == ["Runner"]

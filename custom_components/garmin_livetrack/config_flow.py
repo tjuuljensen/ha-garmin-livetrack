@@ -44,6 +44,7 @@ from .const import (
 )
 
 CONF_EDIT_USER = "edit_user"
+CONF_USER_ACTION = "user_action"
 CONF_USER_ACTIVITY_MODE = "user_activity_mode"
 CONF_ADVANCED_BASELINE = "advanced_profile_defaults"
 
@@ -72,8 +73,15 @@ def _global_schema(
         ): bool,
         vol.Required(
             CONF_ALLOWED_USERS,
-            default=", ".join(defaults.get(CONF_ALLOWED_USERS, DEFAULT_ALLOWED_USERS)) if include_users else "",
-        ): str,
+            default=defaults.get(CONF_ALLOWED_USERS, DEFAULT_ALLOWED_USERS) if include_users else "",
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=sorted({*(known_users or []), *defaults.get(CONF_ALLOWED_USERS, DEFAULT_ALLOWED_USERS)}, key=str.lower) if include_users else [],
+                multiple=include_users,
+                custom_value=include_users,
+                mode=selector.SelectSelectorMode.DROPDOWN if include_users else selector.SelectSelectorMode.DROPDOWN,
+            )
+        ) if include_users else str,
         vol.Required(
             CONF_ACTIVITY_FILTER,
             default=defaults.get(CONF_ACTIVITY_FILTER, DEFAULT_ACTIVITY_FILTER),
@@ -190,6 +198,18 @@ def _user_policy_schema(defaults: dict) -> vol.Schema:
     activity_mode = "custom" if allowed_activities else "inherit_global"
     return vol.Schema(
         {
+            vol.Required(
+                CONF_USER_ACTION,
+                default=defaults.get(CONF_USER_ACTION, "update"),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value="update", label="Update policy"),
+                        selector.SelectOptionDict(value="remove", label="Remove user"),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required("enabled", default=defaults.get("enabled", True)): bool,
             vol.Required("mode", default=defaults.get("mode", "normal")): vol.In(
                 ["normal", "register_only", "one_event_only"]
@@ -214,8 +234,15 @@ def _user_policy_schema(defaults: dict) -> vol.Schema:
 
 def _normalize(inp: dict, *, include_users: bool) -> dict:
     out = dict(inp)
-    raw_users = str(out.get(CONF_ALLOWED_USERS, "") or "")
-    out[CONF_ALLOWED_USERS] = [u.strip() for u in raw_users.split(",") if u.strip()] if include_users else []
+    if include_users:
+        raw_allowed = out.get(CONF_ALLOWED_USERS, [])
+        if isinstance(raw_allowed, list):
+            out[CONF_ALLOWED_USERS] = [str(u).strip() for u in raw_allowed if str(u).strip()]
+        else:
+            raw_users = str(raw_allowed or "")
+            out[CONF_ALLOWED_USERS] = [u.strip() for u in raw_users.split(",") if u.strip()]
+    else:
+        out[CONF_ALLOWED_USERS] = []
     profile = str(out.get(CONF_UPDATE_PROFILE, DEFAULT_UPDATE_PROFILE) or DEFAULT_UPDATE_PROFILE).strip().lower()
     if profile not in UPDATE_PROFILE_VALUES:
         profile = DEFAULT_UPDATE_PROFILE
@@ -270,6 +297,14 @@ def _normalize_advanced_profile(inp: dict) -> dict:
 
 def _normalize_user_policy(inp: dict) -> dict:
     out = dict(inp)
+    action = str(out.get(CONF_USER_ACTION, "update") or "update").strip().lower()
+    if action not in {"update", "remove"}:
+        action = "update"
+    out[CONF_USER_ACTION] = action
+    if action == "remove":
+        out["allowed_activities"] = None
+        out.pop(CONF_USER_ACTIVITY_MODE, None)
+        return out
     activities = out.get("allowed_activities")
     if isinstance(activities, list):
         out["allowed_activities"] = [str(part).strip().lower() for part in activities if str(part).strip()]
@@ -325,6 +360,10 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
         self._pending_options: dict | None = None
         self._selected_user: str | None = None
 
+    def _runtime_manager(self):
+        runtime = getattr(self._config_entry, "runtime_data", None)
+        return getattr(runtime, "manager", None) if runtime is not None else None
+
     def _known_users(self) -> list[str]:
         defaults = {**self._config_entry.data, **self._config_entry.options}
         users = defaults.get(CONF_ALLOWED_USERS, []) or []
@@ -336,7 +375,27 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
                 if name:
                     user_names.add(name)
         user_names.update(str(name).strip() for name in policies.keys() if str(name).strip())
+        manager = self._runtime_manager()
+        if manager is not None:
+            for policy in getattr(manager, "known_users", {}).values():
+                name = str(getattr(policy, "name", "") or "").strip()
+                if name:
+                    user_names.add(name)
         return sorted(user_names, key=str.lower)
+
+    @staticmethod
+    def _remove_user_from_options(defaults: dict, selected_user: str) -> dict:
+        user_key = selected_user.strip().lower()
+        merged = dict(defaults)
+        current_users = [u for u in merged.get(CONF_ALLOWED_USERS, []) if isinstance(u, str)]
+        merged[CONF_ALLOWED_USERS] = [u for u in current_users if u.strip().lower() != user_key]
+        current_policies = dict(merged.get(CONF_USER_POLICIES, {}) or {})
+        merged[CONF_USER_POLICIES] = {
+            key: value
+            for key, value in current_policies.items()
+            if str(key).strip().lower() != user_key
+        }
+        return merged
 
     def _has_existing_advanced_settings(self, defaults: dict) -> bool:
         return bool(
@@ -466,11 +525,34 @@ class GarminLiveTrackOptionsFlow(config_entries.OptionsFlow):
                 if str(key).strip().lower() == selected_user.lower() and isinstance(row, dict):
                     existing = dict(row)
                     break
+        if not existing:
+            manager = self._runtime_manager()
+            if manager is not None:
+                policy = getattr(manager, "known_users", {}).get(selected_user.lower())
+                if policy is not None:
+                    existing = {
+                        "enabled": bool(getattr(policy, "enabled", True)),
+                        "mode": str(getattr(policy, "mode", "normal") or "normal"),
+                        "allowed_activities": list(getattr(policy, "allowed_activities", []) or []),
+                    }
+        existing.setdefault(CONF_USER_ACTION, "update")
         errors = {}
         if user_input is not None:
             try:
                 normalized_policy = _normalize_user_policy(user_input)
+                action = normalized_policy.pop(CONF_USER_ACTION, "update")
+                if action == "remove":
+                    manager = self._runtime_manager()
+                    if manager is not None:
+                        await manager.async_remove_user(selected_user)
+                    merged = self._remove_user_from_options(defaults, selected_user)
+                    return self.async_create_entry(title="", data=merged)
                 normalized_policy["name"] = selected_user
+                user_policies = {
+                    key: value
+                    for key, value in user_policies.items()
+                    if str(key).strip().lower() != selected_user.lower()
+                }
                 user_policies[selected_user] = normalized_policy
                 merged = {**defaults, CONF_USER_POLICIES: user_policies}
                 return self.async_create_entry(title="", data=merged)

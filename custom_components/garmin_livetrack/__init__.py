@@ -112,7 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Garmin LiveTrack migrated legacy notification settings out of updated options")
         rt.manager.options = {**clean_data, **clean_options}
         rt.manager._sync_client_options()
-        rt.manager._apply_option_user_policies()
+        await rt.manager.async_reload_users()
         await rt.manager._update_imap_listener()
         await rt.manager.async_save_storage()
 

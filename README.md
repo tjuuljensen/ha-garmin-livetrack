@@ -160,7 +160,7 @@ Use Home Assistant automations, scripts, blueprints, or YAML packages to send
 mobile, persistent, voice, Android, or iOS notifications.
 
 An example package is available at:
-- [docs/garmin_livetrack_notifications_example_unverified.yaml](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\garmin_livetrack_notifications_example_unverified.yaml)
+- [docs/garmin_livetrack_notifications_example_unverified.yaml](docs\garmin_livetrack_notifications_example_unverified.yaml)
 
 ## Custom HTTP User-Agent
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
@@ -550,5 +550,6 @@ bash ./scripts/test-local.sh --python python3.12
 ```
 
 ## Additional Documentation
-- [TODO.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\TODO.md)
-- [docs/ARCHITECTURE.md](C:\Users\tjuuljensen\git\ha-garmin-livetrack\docs\ARCHITECTURE.md)
+- [TODO.md](TODO.md)
+- [docs/ARCHITECTURE.md](docs\ARCHITECTURE.md)
+- [docs/GARMIN_FETCH_STRATEGY.md](docs\GARMIN_FETCH_STRATEGY.md)

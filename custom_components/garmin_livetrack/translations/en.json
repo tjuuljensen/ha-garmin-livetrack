@@ -13,7 +13,7 @@
                     "update_profile": "Update profile"
                 },
                 "data_description": {
-                    "allowed_users": "Comma-separated Garmin display names.",
+                    "allowed_users": "Suggested known users are shown, and you can still type a new Garmin display name to pre-register it before the first LiveTrack arrives.",
                     "activity_filter": "Default filter used when a user has no custom activity override.",
                     "update_profile": "Extended: 10 min. Conservative: 60 sec. Balanced: 30 sec. Adaptive: 15 sec metadata poll w. trackpoint publish-frequency gating. Advanced: low-level interval and lifecycle tuning."
                 }
@@ -42,7 +42,7 @@
                     "edit_user": "Edit user"
                 },
                 "data_description": {
-                    "allowed_users": "Comma-separated Garmin display names. You can pre-register a user before their first LiveTrack arrives.",
+                    "allowed_users": "Suggested known users are shown, and you can still type a new Garmin display name to pre-register it before the first LiveTrack arrives.",
                     "activity_filter": "Global default. A user custom activity selection overrides this value.",
                     "update_profile": "Extended: 10 min. Conservative: 60 sec. Balanced: 30 sec. Adaptive: 15 sec metadata poll w. trackpoint publish-frequency gating. Advanced: low-level interval and lifecycle tuning.",
                     "edit_user": "Select a configured user to edit per-user policy."
@@ -90,12 +90,14 @@
                 "title": "User Policy",
                 "description": "Update Garmin LiveTrack policy for {user}. Allowed activities are only used when activity mode is set to custom.",
                 "data": {
+                    "user_action": "User action",
                     "enabled": "Tracking enabled",
                     "mode": "User handling mode",
                     "user_activity_mode": "Activity filter mode",
                     "allowed_activities": "Allowed activities"
                 },
                 "data_description": {
+                    "user_action": "Update policy saves the current user settings. Remove user deletes the user from configured users and stored policy state.",
                     "mode": "normal tracks normally, register_only records the user but does not track, one_event_only allows one accepted event before disabling.",
                     "user_activity_mode": "inherit_global uses the global default activity filter. custom overrides it for this user.",
                     "allowed_activities": "Only used when Activity filter mode is custom."

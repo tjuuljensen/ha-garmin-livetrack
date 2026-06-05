@@ -15,6 +15,7 @@ from .const import (
     CONF_ACTIVITY_FILTER,
     CONF_ALLOWED_USERS,
     CONF_FINALIZATION_MINUTES,
+    CONF_INITIAL_TRACKPOINT_WAIT,
     CONF_LISTEN_TO_IMAP_EVENTS,
     CONF_MAX_RUNTIME_HOURS,
     CONF_STALE_MINUTES,
@@ -893,6 +894,7 @@ class GarminLiveTrackManager:
         self._sync_client_options()
         await self.async_load_storage()
         self._apply_option_user_policies()
+        self._apply_allowed_users_registry()
         self._register_services()
         await self._update_imap_listener()
         await self._update_shape_change_signal()
@@ -1154,6 +1156,7 @@ class GarminLiveTrackManager:
     async def async_reload_users(self):
         await self.async_load_storage()
         self._apply_option_user_policies()
+        self._apply_allowed_users_registry()
 
     async def async_refresh_session(self, session_id: str | None = None, session_id_hash: str | None = None) -> bool:
         target_sid = None
@@ -1389,6 +1392,30 @@ class GarminLiveTrackManager:
             if "allowed_activities" in row:
                 policy.allowed_activities = self._normalize_allowed_activities(row.get("allowed_activities"))
             self._sync_allowed_user(policy.name)
+
+    def _apply_allowed_users_registry(self) -> None:
+        raw_users = self.options.get(CONF_ALLOWED_USERS, []) or []
+        if not isinstance(raw_users, list):
+            return
+        now = datetime.now(UTC)
+        for raw_name in raw_users:
+            clean_name = str(raw_name or "").strip()
+            if not clean_name:
+                continue
+            key = self._user_key(clean_name)
+            policy = self.known_users.get(key)
+            if policy is None:
+                self.known_users[key] = UserPolicy(
+                    name=clean_name,
+                    enabled=True,
+                    first_seen=now,
+                    last_seen=now,
+                    first_event_consumed=False,
+                    mode="normal",
+                )
+            else:
+                policy.name = clean_name
+            self._sync_allowed_user(clean_name)
 
     @staticmethod
     def _normalize_allowed_activities(value) -> list[str] | None:
