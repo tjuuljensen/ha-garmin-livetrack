@@ -196,26 +196,14 @@ class LiveTrackSessionCoordinator:
         if fetch.errors:
             self.manager.last_error = fetch.errors[-1].code
             codes = {e.code for e in fetch.errors}
-            shape_signal_changed = False
-            if "missing_session" in codes or "missing_trackpoints" in codes:
-                self.manager.shape_change_count += 1
-                if self.manager.shape_change_count >= 3:
-                    if not self.manager.shape_change_suspected:
-                        self.manager.shape_change_suspected = True
-                        shape_signal_changed = True
-            else:
-                if self.manager.shape_change_count or self.manager.shape_change_suspected:
-                    self.manager.shape_change_count = 0
-                    if self.manager.shape_change_suspected:
-                        self.manager.shape_change_suspected = False
-                    shape_signal_changed = True
-            if shape_signal_changed:
-                await self.manager._update_shape_change_signal()
-        elif self.manager.shape_change_count:
-            self.manager.shape_change_count = max(0, self.manager.shape_change_count - 1)
-            if self.manager.shape_change_count == 0 and self.manager.shape_change_suspected:
-                self.manager.shape_change_suspected = False
-                await self.manager._update_shape_change_signal()
+            issue_worthy_missing_trackpoints = (
+                "missing_trackpoints" in codes
+                and self.session.trackpoint_count > 0
+            )
+            if "missing_session" in codes or issue_worthy_missing_trackpoints:
+                await self.manager._record_shape_change_anomaly()
+        elif fetch.ok and self.session.trackpoint_count > 0:
+            await self.manager._clear_shape_change_anomaly()
 
         if fetch.ok:
             first_success = self.session.last_success is None
@@ -791,6 +779,25 @@ class GarminLiveTrackManager:
         for listener in list(self._listeners):
             listener()
 
+    async def _set_shape_change_signal(self, suspected: bool, count: int) -> None:
+        changed = (self.shape_change_suspected != suspected) or (self.shape_change_count != count)
+        self.shape_change_suspected = suspected
+        self.shape_change_count = max(0, int(count))
+        if changed:
+            await self._update_shape_change_signal()
+
+    async def _record_shape_change_anomaly(self) -> None:
+        count = self.shape_change_count + 1
+        suspected = self.shape_change_suspected or count >= 3
+        await self._set_shape_change_signal(suspected, count)
+
+    async def _clear_shape_change_anomaly(self) -> None:
+        if not self.shape_change_count and not self.shape_change_suspected:
+            return
+        count = max(0, self.shape_change_count - 1)
+        suspected = self.shape_change_suspected and count > 0
+        await self._set_shape_change_signal(suspected, count)
+
     async def _update_shape_change_signal(self) -> None:
         async_sync_shape_change_issue(
             self.hass,
@@ -1117,6 +1124,8 @@ class GarminLiveTrackManager:
 
     async def async_finalize_session(self, coord: LiveTrackSessionCoordinator, reason: str) -> None:
         sid = self._session_key(coord.session.identity.session_id)
+        if reason == "no_trackpoints":
+            await self._record_shape_change_anomaly()
         self.ended_session_debug[sid] = self._debug_snapshot(coord)
         self.sessions.pop(sid, None)
         coord.session.end_reason = reason

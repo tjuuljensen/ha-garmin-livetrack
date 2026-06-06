@@ -508,7 +508,14 @@ Check:
 - configured `HTTP User-Agent`
 - browser behavior with the same LiveTrack
 
-If the problem repeats, Home Assistant should also raise a Garmin LiveTrack repair issue indicating that the Garmin response shape may have changed.
+`missing_trackpoints` during startup is treated as a transient session condition while the integration is still waiting for the first usable point.
+
+The repair signal is reserved for more durable anomalies such as:
+- repeated `missing_session` responses
+- repeated `missing_trackpoints` after a session had already produced points
+- sessions that fully age out and end with `no_trackpoints`
+
+If those patterns repeat, Home Assistant should also raise a Garmin LiveTrack repair issue indicating that the Garmin response shape may have changed.
 
 
 ## Release Model

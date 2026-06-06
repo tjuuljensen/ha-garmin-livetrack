@@ -379,6 +379,49 @@ async def test_shape_change_signal_syncs_repair_issue(monkeypatch, hass):
 
 
 @pytest.mark.asyncio
+async def test_startup_missing_trackpoints_that_later_recovers_does_not_raise_shape_change(hass):
+    base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    fetches = [
+        SequenceFetch(
+            ok=False,
+            fetched_at=base,
+            trackpoint_count=0,
+            session={"sessionId": "recover-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={},
+            errors=[LiveTrackError("missing_trackpoints", "No trackpoints", base, True)],
+        ),
+        SequenceFetch(
+            ok=True,
+            fetched_at=base + timedelta(minutes=2),
+            trackpoint_count=1,
+            session={"sessionId": "recover-1", "userDisplayName": "Runner", "activityType": "running"},
+            last_trackpoint={
+                "dateTime": "2026-01-01T10:02:00Z",
+                "position": {"lat": 55.67, "lon": 12.56},
+                "distance": 500,
+                "duration": 120,
+            },
+        ),
+    ]
+    m = GarminLiveTrackManager(hass, SequenceClient(fetches), DummyStore(), {})
+    await m.async_setup()
+    identity = LiveTrackIdentity("recover-1", "token", "https://livetrack.garmin.com/session/recover-1/token/token", "redacted", LiveTrackSource.SERVICE)
+    session = LiveTrackSession(identity, None, None, None, None, None, base, None, None, None, 0, LiveTrackStatus.DISCOVERED)
+    coord = LiveTrackSessionCoordinator(m, session)
+    m.sessions["recover-1"] = coord
+
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.WAITING_FOR_TRACKPOINT
+    assert m.shape_change_count == 0
+    assert m.shape_change_suspected is False
+
+    await coord._refresh_once()
+    assert coord.session.status == LiveTrackStatus.ACTIVE
+    assert m.shape_change_count == 0
+    assert m.shape_change_suspected is False
+
+
+@pytest.mark.asyncio
 async def test_strict_false_registers_unknown_user_and_tracks_immediately(hass):
     m = GarminLiveTrackManager(
         hass,
@@ -885,6 +928,8 @@ async def test_no_trackpoints_still_transitions_to_stale(hass):
     assert coord.session.status == LiveTrackStatus.STALE
     assert coord.end_reason == "no_trackpoints"
     assert "empty-1" in m.ended_sessions
+    assert m.shape_change_count == 1
+    assert m.shape_change_suspected is False
 
 
 @pytest.mark.asyncio
