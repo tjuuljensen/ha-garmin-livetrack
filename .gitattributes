@@ -1,0 +1,25 @@
+# Cross-platform line ending policy for Home Assistant config sources.
+* text=auto
+
+# Keep source and docs files normalized to LF across Windows/Linux/HA host.
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
+*.jinja text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.csv text eol=lf
+*.svg text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Binary assets should never be line-ending normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
