@@ -37,7 +37,6 @@ from .const import (
     EVENT_SESSION_UPDATED,
     SERVICE_ADD_URL,
     SERVICE_CLEAR_ENDED,
-    SERVICE_CLEANUP_LEGACY_ENTITIES,
     SERVICE_LIST_USERS,
     SERVICE_REMOVE_USER,
     SERVICE_RELOAD_USERS,
@@ -1373,53 +1372,6 @@ class GarminLiveTrackManager:
             count += 1
         return count
 
-    async def async_cleanup_legacy_entities(self) -> int:
-        registry = er.async_get(self.hass)
-        to_remove: list[str] = []
-        expected_user_keys: set[str] = set()
-        for name in self.known_users:
-            key = self._user_key(name)
-            if key:
-                expected_user_keys.add(key)
-        for coord in self.sessions.values():
-            key = self._user_key(coord.session.garmin_user)
-            if key:
-                expected_user_keys.add(key)
-
-        expected_user_uids: set[str] = set()
-        for key in expected_user_keys:
-            h = stable_session_hash(key)
-            expected_user_uids.add(f"garmin_livetrack_user_status_{h}")
-            expected_user_uids.add(f"garmin_livetrack_user_active_{h}")
-            expected_user_uids.add(f"garmin_livetrack_user_tracker_{h}")
-
-        for entry in list(registry.entities.values()):
-            if entry.platform != "garmin_livetrack":
-                continue
-            if entry.disabled_by is not None:
-                continue
-            uid = entry.unique_id or ""
-            # Keep current per-user and aggregate entity families.
-            if uid.startswith("garmin_livetrack_user_"):
-                if uid in expected_user_uids:
-                    continue
-                to_remove.append(entry.entity_id)
-                continue
-            if uid in {
-                "garmin_livetrack_active_count",
-                "garmin_livetrack_last_error",
-                "garmin_livetrack_any_active",
-            }:
-                continue
-            # Remove only unavailable/orphan candidates.
-            if entry.entity_id in self.hass.states.async_entity_ids():
-                continue
-            to_remove.append(entry.entity_id)
-
-        for entity_id in to_remove:
-            registry.async_remove(entity_id)
-        return len(to_remove)
-
     async def async_set_user_policy(
         self,
         user: str,
@@ -1780,9 +1732,6 @@ class GarminLiveTrackManager:
         async def _refresh_all(call):
             await self.async_refresh_all()
 
-        async def _cleanup_legacy(call):
-            await self.async_cleanup_legacy_entities()
-
         async def _set_user_policy(call):
             await self.async_set_user_policy(
                 call.data.get("user", ""),
@@ -1814,8 +1763,6 @@ class GarminLiveTrackManager:
             self.hass.services.async_register("garmin_livetrack", SERVICE_REFRESH_SESSION, _refresh_session)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_REFRESH_ALL):
             self.hass.services.async_register("garmin_livetrack", SERVICE_REFRESH_ALL, _refresh_all)
-        if not self.hass.services.has_service("garmin_livetrack", SERVICE_CLEANUP_LEGACY_ENTITIES):
-            self.hass.services.async_register("garmin_livetrack", SERVICE_CLEANUP_LEGACY_ENTITIES, _cleanup_legacy)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_SET_USER_POLICY):
             self.hass.services.async_register("garmin_livetrack", SERVICE_SET_USER_POLICY, _set_user_policy)
         if not self.hass.services.has_service("garmin_livetrack", SERVICE_REMOVE_USER):

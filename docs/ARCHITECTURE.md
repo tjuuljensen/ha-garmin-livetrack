@@ -276,13 +276,8 @@ The following decisions are currently intentional and closed:
 - additional no-END discarded-activity coverage
 - shape-change repair-signal transition tests
 
-### Entity-registry cleanup
-- keep `garmin_livetrack.cleanup_legacy_entities` as an optional stale-registry cleanup tool
-- add cleanup tests that verify active entities are not removed
-
 ### Documentation
 - keep README and TODO aligned with runtime behavior
-- keep cleanup guidance framed around generic entity-registry cleanup rather than one specific prior setup
 
 ## Release Model
 HACS-facing releases should map to explicit Git tags and GitHub releases. The repository should not treat arbitrary `main` commits as published release artifacts.

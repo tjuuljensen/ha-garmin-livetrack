@@ -2,17 +2,44 @@
 
 Home Assistant custom integration for Garmin LiveTrack session monitoring.
 
+**Updated for Garmin LiveTrack API v2:** version `0.2.1` fetches session metadata from `/api/v2/sessions/{sessionId}`. Trackpoints continue to use `/api/sessions/{sessionId}/track-points/common`.
+
 The integration accepts Garmin LiveTrack URLs from Home Assistant services and IMAP events, tracks one or more sessions independently, restores recoverable sessions after restart, exposes stable user devices and global health entities, and keeps Garmin tokens out of normal logs, diagnostics, and non-storage state.
 
+## Contents
+
+- [Status](#status)
+- [Important Warning](#important-warning)
+- [Installation](#installation)
+- [External Setup](#external-setup)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Notifications](#notifications)
+- [Custom HTTP User-Agent](#custom-http-user-agent)
+- [Services](#services)
+- [Events](#events)
+- [Entities](#entities)
+- [Runtime Overview](#runtime-overview)
+- [Garmin Fetch Strategy](#garmin-fetch-strategy)
+- [Session Lifecycle](#session-lifecycle)
+- [Tuning](#tuning)
+- [Privacy and Security](#privacy-and-security)
+- [Troubleshooting](#troubleshooting)
+- [Release Model](#release-model)
+- [Local Testing](#local-testing)
+- [Additional Documentation](#additional-documentation)
+
 ## Status
-Current version: `0.2.0`
+Current version: `0.2.1`
+
+See the [v0.2.1 release notes](docs/releases/v0.2.1.md) for the latest changes.
 
 Implemented:
 - UI setup through Home Assistant config entries
 - manual URL ingestion
 - IMAP event ingestion
 - independent concurrent session tracking
-- layered Garmin fetch strategy with a dedicated incremental trackpoint endpoint
+- layered Garmin fetch strategy with API v2 session metadata and a dedicated incremental trackpoint endpoint
 - adaptive polling using Garmin `postTrackPointFrequency` when enabled
 - per-session transport backoff for Garmin 429, 5xx, and retryable request failures
 - per-user stable entities and device trackers
@@ -24,7 +51,6 @@ Implemented:
 Remaining work is mainly:
 - more real-world runtime validation across different Garmin activity types
 - a few remaining lifecycle edge-case tests
-- entity-registry cleanup polish
 
 ## Important Warning
 Garmin LiveTrack is not a documented public API. Garmin can change the public page structure, hydration payloads, or API response shape without notice. This integration is built defensively, but Garmin-side changes can still affect session parsing or trackpoint extraction.
@@ -160,13 +186,13 @@ Use Home Assistant automations, scripts, blueprints, or YAML packages to send
 mobile, persistent, voice, Android, or iOS notifications.
 
 An example package is available at:
-- [docs/garmin_livetrack_notifications_example_unverified.yaml](docs\garmin_livetrack_notifications_example_unverified.yaml)
+- [docs/garmin_livetrack_notifications_example_unverified.yaml](docs/garmin_livetrack_notifications_example_unverified.yaml)
 
 ## Custom HTTP User-Agent
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
-- `HomeAssistant-GarminLiveTrack/0.2.0`
+- `HomeAssistant-GarminLiveTrack/0.2.1`
 
 Typical reasons to change it:
 - Garmin behaves differently for different clients
@@ -181,7 +207,7 @@ Recommended approach:
 
 Common examples:
 - integration default:
-  - `HomeAssistant-GarminLiveTrack/0.2.0`
+  - `HomeAssistant-GarminLiveTrack/0.2.1`
 - Windows Chrome:
   - `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36`
 - macOS Safari:
@@ -240,9 +266,6 @@ Remove a known user policy.
 
 ### `garmin_livetrack.list_users`
 Return known users plus stored and effective policy information.
-
-### `garmin_livetrack.cleanup_legacy_entities`
-Remove orphaned Garmin LiveTrack entity-registry entries that are no longer provided by the integration.
 
 ## Events
 The integration emits Home Assistant events for automation and package consumers:
@@ -485,13 +508,6 @@ Confirm:
 - the IMAP integration is firing `imap_content`
 - the event body contains a Garmin URL
 - quoted-printable soft line breaks are removed
-
-### Stale entity-registry entries
-If Home Assistant still shows Garmin LiveTrack entities that this integration no longer provides, run:
-
-- `garmin_livetrack.cleanup_legacy_entities`
-
-This is an optional cleanup utility. It is useful when stale entity-registry entries remain from earlier integration iterations or different unique-ID schemes.
 
 ### Invalid URL
 Only Garmin LiveTrack URLs hosted on `livetrack.garmin.com` are accepted.

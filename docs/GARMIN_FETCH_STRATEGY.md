@@ -83,7 +83,7 @@ Why this exists:
 Entry point: `GarminLiveTrackClient.fetch_session()`.
 
 Primary session metadata URL:
-- `GET /api/sessions/{sessionId}?token={token}`
+- `GET /api/v2/sessions/{sessionId}?token={token}`
 
 Headers:
 - `User-Agent`

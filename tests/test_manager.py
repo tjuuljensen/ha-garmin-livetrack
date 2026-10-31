@@ -990,45 +990,6 @@ async def test_inferred_ending_beats_stale_when_session_end_is_past(hass):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_legacy_entities_removes_deprecated_session_count(monkeypatch, hass):
-    class FakeEntry:
-        def __init__(self, entity_id, unique_id, platform="garmin_livetrack", disabled_by=None):
-            self.entity_id = entity_id
-            self.unique_id = unique_id
-            self.platform = platform
-            self.disabled_by = disabled_by
-
-    class FakeRegistry:
-        def __init__(self):
-            self.entities = {
-                "keep_active_count": FakeEntry(
-                    "sensor.garmin_livetrack_active_count",
-                    "garmin_livetrack_active_count",
-                ),
-                "remove_session_count": FakeEntry(
-                    "sensor.garmin_livetrack_session_count",
-                    "garmin_livetrack_session_count",
-                ),
-            }
-            self.removed = []
-
-        def async_remove(self, entity_id):
-            self.removed.append(entity_id)
-
-    fake_registry = FakeRegistry()
-
-    from custom_components.garmin_livetrack import coordinator as coordinator_module
-
-    monkeypatch.setattr(coordinator_module.er, "async_get", lambda _hass: fake_registry)
-    m = GarminLiveTrackManager(hass, DummyClient(), DummyStore(), {})
-    await m.async_setup()
-    count = await m.async_cleanup_legacy_entities()
-
-    assert count == 1
-    assert fake_registry.removed == ["sensor.garmin_livetrack_session_count"]
-
-
-@pytest.mark.asyncio
 async def test_rate_limit_backoff_escalates_and_clears_on_success(hass):
     base = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     fetches = [
@@ -1154,7 +1115,34 @@ async def test_strict_true_allows_user_from_allowed_users_registry(hass):
 
 
 @pytest.mark.asyncio
-async def test_async_remove_user_purges_user_state(hass):
+async def test_async_remove_user_purges_user_state(hass, monkeypatch):
+    from types import SimpleNamespace
+    from custom_components.garmin_livetrack import coordinator as coordinator_module
+
+    runner_hash = coordinator_module.stable_session_hash("runner")
+    entity_ids = {
+        (domain, f"garmin_livetrack_user_{kind}_{runner_hash}"): f"{domain}.runner_{kind}"
+        for domain, kind in (
+            ("sensor", "status"),
+            ("binary_sensor", "active"),
+            ("device_tracker", "tracker"),
+        )
+    }
+    removed_entities = []
+    removed_devices = []
+    entity_registry = SimpleNamespace(
+        async_get_entity_id=lambda domain, platform, uid: entity_ids.get((domain, uid)),
+        async_remove=removed_entities.append,
+    )
+    device_registry = SimpleNamespace(
+        devices={
+            "runner": SimpleNamespace(id="runner", identifiers={("garmin_livetrack", f"user:{runner_hash}")}),
+            "other": SimpleNamespace(id="other", identifiers={("garmin_livetrack", "user:other")}),
+        },
+        async_remove_device=removed_devices.append,
+    )
+    monkeypatch.setattr(coordinator_module.er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(coordinator_module.dr, "async_get", lambda _hass: device_registry)
     m = GarminLiveTrackManager(
         hass,
         UrlAwareDummyClient(),
@@ -1232,3 +1220,5 @@ async def test_async_remove_user_purges_user_state(hass):
     assert list(m.options["user_policies"].keys()) == ["Other"]
     assert runner_identity.session_id not in m.sessions
     assert ended_identity.session_id not in m.ended_sessions
+    assert set(removed_entities) == set(entity_ids.values())
+    assert removed_devices == ["runner"]

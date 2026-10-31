@@ -39,9 +39,6 @@ refresh_session:
 refresh_all:
   name: Refresh All
   description: Force an immediate refresh for all active sessions.
-cleanup_legacy_entities:
-  name: Cleanup Legacy Entities
-  description: Remove orphaned legacy Garmin LiveTrack entities no longer provided by this integration.
 set_user_policy:
   name: Set User Policy
   description: Update user tracking policy and activity overrides.
