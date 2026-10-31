@@ -96,7 +96,7 @@ class GarminLiveTrackClient:
         return await self.fetch_full(identity)
 
     def _session_api_url(self, identity: LiveTrackIdentity) -> str:
-        return f"https://livetrack.garmin.com/api/sessions/{identity.session_id}?token={identity.token}"
+        return f"https://livetrack.garmin.com/api/v2/sessions/{identity.session_id}?token={identity.token}"
 
     def _coerce_begin(self, begin: datetime | str | None) -> str | None:
         if begin is None:

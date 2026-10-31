@@ -111,6 +111,8 @@ async def test_fetch_session_retries_once_after_403_with_refreshed_csrf():
 
     assert result.ok is True
     assert len(session.calls) == 4
+    assert urlparse(session.calls[1]["url"]).path == "/api/v2/sessions/abc"
+    assert urlparse(session.calls[3]["url"]).path == "/api/v2/sessions/abc"
     assert session.calls[1]["headers"]["Livetrack-Csrf-Token"] == "csrf-1"
     assert session.calls[3]["headers"]["Livetrack-Csrf-Token"] == "csrf-2"
 

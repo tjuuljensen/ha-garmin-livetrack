@@ -20,7 +20,7 @@ For one LiveTrack session, the request strategy is:
 1. Parse and canonicalize the LiveTrack URL.
 2. Fetch the public LiveTrack page for that session.
 3. Extract cookies and a CSRF token from the page response.
-4. Fetch Garmin session metadata from `/api/sessions/{sessionId}?token=...`.
+4. Fetch Garmin session metadata from `/api/v2/sessions/{sessionId}?token=...`.
 5. Fetch trackpoints from `/api/sessions/{sessionId}/track-points/common?token=...`.
 6. If dedicated trackpoint fetching is not usable, fall back to broader payload and hydration parsing.
 7. Apply lifecycle logic, adaptive scheduling, and backoff in the coordinator layer.
