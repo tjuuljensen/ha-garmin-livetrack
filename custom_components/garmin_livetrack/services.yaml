@@ -8,7 +8,7 @@ add_url:
         text:
 stop_session:
   name: Stop Session
-  description: Stop one active LiveTrack session.
+  description: Stop one active LiveTrack session. Supply session_id or session_id_hash.
   fields:
     session_id:
       required: false
@@ -26,7 +26,7 @@ reload_users:
   description: Reload known users from storage.
 refresh_session:
   name: Refresh Session
-  description: Force an immediate refresh for one active session.
+  description: Request a refresh for one active session using session_id or session_id_hash. Transport backoff still applies.
   fields:
     session_id:
       required: false
@@ -38,7 +38,7 @@ refresh_session:
         text:
 refresh_all:
   name: Refresh All
-  description: Force an immediate refresh for all active sessions.
+  description: Request a refresh for all active sessions. Transport backoff still applies.
 set_user_policy:
   name: Set User Policy
   description: Update user tracking policy and activity overrides.
@@ -65,7 +65,7 @@ set_user_policy:
         text:
 remove_user:
   name: Remove User
-  description: Remove a configured user policy entry.
+  description: Remove a user, stop their active sessions, and purge their retained summaries and registered entities.
   fields:
     user:
       required: true

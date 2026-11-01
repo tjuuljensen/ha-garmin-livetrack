@@ -1,9 +1,9 @@
 # Garmin LiveTrack Integration Architecture
 
 ## Purpose
-This document describes the current architecture, operational model, and remaining implementation work for the `garmin_livetrack` integration.
+This document describes the architecture and operational model for the `garmin_livetrack` integration.
 
-It is the maintainers' technical snapshot. The README is the operator-facing document. `TODO.md` is the active backlog.
+The [README](../README.md) covers setup and operation. [TODO.md](../TODO.md) tracks development work.
 
 ## Scope
 The integration provides:
@@ -88,7 +88,7 @@ Persistent state lives in Home Assistant storage, not helper entities.
 
 Stored data includes:
 - recoverable active-session summaries
-- token for restart recovery only
+- tokens for active-session recovery and full URLs in retained ended-session summaries
 - known user policies
 - retained ended-session summary state for status-sensor presentation after restart
 
@@ -118,31 +118,19 @@ The integration can finalize a session from:
 - fetch-ok but inactive/no-progress behavior
 - manual stop
 
-The user-facing terminal state remains `ended`. Differentiation is carried through `end_reason`.
+Explicit or inferred completion produces `ended`; manual stops produce `stopped`, runtime limits produce `expired`, and missing data or prolonged fetch failures can produce `stale`. `end_reason` records the cause. Manual stops emit `garmin_livetrack_session_updated`; finalization emits `garmin_livetrack_session_ended`.
 
 ### Retention
 Per-user status sensors continue to present the latest ended-session data during the configured retention window. The retained summary is persisted and restored across Home Assistant restarts, so dashboards remain informative after a LiveTrack stops and after HA reboots.
 
 ## User Policy Model
-### Global defaults
-Global settings define the default behavior for:
-- activity filter
+### Global defaults and per-user overrides
 
-### Per-user overrides
-Per-user policy can override:
-- tracking enabled
-- handling mode
-- activity filter
+Global settings control IMAP ingestion, user admission, activity filtering, polling, retention, and lifecycle timing. Per-user policy stores an enabled flag, handling mode, and optional activity filter.
 
-### Unknown-user handling
-Behavior depends on:
-- `strict_users`
-- `accept_first_seen_users`
+User admission depends on `strict_users` and `accept_first_seen_users`; see the [approval matrix](ADVANCED.md#unknown-users-and-approval). Disabled-user policies are enforced only with `strict_users` enabled. A custom per-user activity filter overrides the global filter regardless of strict-user mode.
 
-Supported paths:
-- register and track immediately
-- register only and reject tracking
-- allow one event and require later explicit enablement
+New names in the configured-users list become enabled policies. Existing policies retain their enabled state. Policy mode labels are stored metadata; admission uses the strict-user setting and enabled flag rather than treating mode as a separate runtime gate.
 
 ## Notification Boundary
 The integration does not send notifications directly.
@@ -172,7 +160,7 @@ This includes:
 - nested point-like arrays
 
 ### Adaptive mode
-When the update profile is `adaptive`, the coordinator:
+When Garmin publish-frequency gating is enabled (by `Adaptive` or an Advanced override), the coordinator:
 - tracks Garmin `postTrackPointFrequency`
 - computes `next_trackpoints_allowed_at`
 - skips incremental trackpoint requests until Garmin is likely to have published a new point
@@ -198,7 +186,7 @@ Examples:
 - `kayaking` -> `kayak`
 - `adventure_racing` -> `adventure_racing`
 
-Unknown activities are never rejected just because they are unknown. They remain visible in entities, events, and diagnostics and fall back to a generic icon.
+Unknown activities are preserved and use a generic icon. They are accepted by the global `all` filter, but explicit global or per-user activity filters can reject them.
 
 ### Icon mapping
 Icon selection is data-driven through `ACTIVITY_ICONS`. Active and inactive icon variants are chosen from the normalized activity value rather than from ad hoc branching logic.
@@ -211,10 +199,10 @@ The integration keeps Garmin raw point fields where useful and also derives norm
 - `duration_hms`
 - `has_location`
 
-This keeps automation matching and dashboard presentation stable while preserving the underlying Garmin values for diagnostics.
+When Garmin omits duration, distance, or speed, the coordinator can derive them from timestamps and GPS movement. Sparse points can retain earlier altitude, heart rate, power, and cadence. Session diagnostics omit raw point data and coordinates.
 
 
-### Transport backoff
+## Transport Backoff
 Transport protection is per session and transient. Each coordinator can track:
 - `backoff_until`
 - `consecutive_http_failures`
@@ -223,7 +211,7 @@ Transport protection is per session and transient. Each coordinator can track:
 Current backoff policy:
 - `429`: exponential cooldown starting at 2 minutes, capped at 15 minutes
 - `5xx` and retryable request failures: exponential cooldown starting at 30 seconds, capped at 10 minutes
-- `403` after the CSRF retry path still fails: moderate cooldown
+- `403` after the CSRF retry path still fails: 1 minute initially, capped at 5 minutes
 - successful fetch: clear backoff state
 
 The backoff model delays Garmin requests, but it does not suspend lifecycle progression. No-progress, stale, ending, and finalization logic remain the controlling lifecycle layer.
@@ -231,7 +219,7 @@ The backoff model delays Garmin requests, but it does not suspend lifecycle prog
 ## Diagnostics And Repairs
 ### Diagnostics
 Diagnostics provide:
-- redacted configuration
+- configuration options and user display names (not anonymized)
 - active and ended session counts
 - user policy summaries
 - session summaries
@@ -239,20 +227,14 @@ Diagnostics provide:
 - shape-change signal state
 
 ### Shape-change repair signal
-Repeated anomaly patterns such as:
-- missing session
-- missing trackpoints
-- malformed response branches
 
-can raise a Home Assistant repair issue indicating that Garmin's public response shape may have changed.
+The manager counts missing-session responses, missing trackpoints after a session has produced points, and sessions finalized with `no_trackpoints`. Repeated anomalies can raise a Home Assistant repair issue. Initial waits without trackpoints do not increment the signal on every poll.
 
-The same signal is also exposed through:
-- `sensor.garmin_livetrack_last_error` attributes
-- diagnostics
+Successful error-free fetches for sessions with existing points reduce the count. The signal is exposed through `sensor.garmin_livetrack_last_error` attributes and diagnostics.
 
 ## Logging And Debugging
 ### Startup diagnostics
-Startup timing breadcrumbs remain available through runtime state and debug logs. They no longer emit warning-level noise during normal operation.
+Startup timing breadcrumbs are available through runtime state, diagnostics, and debug logs.
 
 ### Debug attributes
 `last_fetch` remains exposed by design.
@@ -263,30 +245,23 @@ Additional troubleshooting attributes:
 - `trackpoints_source`
 - `poll_task_alive`
 
-are gated behind the normal `Expose debug attributes` option in the options UI.
+are gated behind `Expose debug attributes` in the `Advanced` options path. Adaptive scheduling and transport-backoff fields use the same toggle.
 
-## Product Decisions
-The following decisions are currently intentional and closed:
-- full LiveTrack URLs remain exposed on status entities
-- `Expose debug attributes` remains in the normal options UI as an advanced troubleshooting toggle
+## Data Exposure
 
-## Remaining Work
-### High-value remaining tests
-- options-flow tests for user-policy editing
-- additional no-END discarded-activity coverage
-- shape-change repair-signal transition tests
+Status entities expose full LiveTrack URLs, including tokens. Recovery storage and retained ended-session summaries also contain sensitive session data. Event payloads omit URLs and tokens, but include coordinates and activity metrics. Diagnostics use redacted session URLs while retaining user names and policy settings.
 
-### Documentation
-- keep README and TODO aligned with runtime behavior
+See [Privacy and Security](../README.md#privacy-and-security) before sharing state exports or diagnostics.
 
 ## Release Model
 HACS-facing releases should map to explicit Git tags and GitHub releases. The repository should not treat arbitrary `main` commits as published release artifacts.
 
 Release checklist:
 1. bump `manifest.json`, `pyproject.toml`, and the default User-Agent version together
-2. update README if operator-facing behavior changed
-3. create tag `vX.Y.Z`
-4. publish a GitHub release from that tag
-5. let HACS track the release
+2. update README and release notes for operator-facing changes
+3. run the [local test suite](ADVANCED.md#local-testing) and check the Tests, HACS, and Hassfest workflows
+4. create tag `vX.Y.Z`
+5. publish a GitHub release from that tag
+6. verify installation of the published version through HACS
 
 This keeps installation state, diagnostics, and support discussions aligned to a concrete published artifact.

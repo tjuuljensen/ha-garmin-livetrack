@@ -97,8 +97,9 @@
                     "allowed_activities": "Allowed activities"
                 },
                 "data_description": {
-                    "user_action": "Update policy saves the current user settings. Remove user deletes the user from configured users and stored policy state.",
-                    "mode": "normal tracks normally, register_only records the user but does not track, one_event_only allows one accepted event before disabling.",
+                    "enabled": "Only enforced when Require configured users is enabled. Existing sessions are not stopped by disabling this setting.",
+                    "user_action": "Update policy saves the current user settings. Remove user stops active sessions and removes configured-user settings, stored policies, retained summaries, and registered entities.",
+                    "mode": "Records the registration mode. Changing this field alone does not enable tracking or enforce a one-session limit. Use Tracking enabled with Require configured users to control acceptance.",
                     "user_activity_mode": "inherit_global uses the global default activity filter. custom overrides it for this user.",
                     "allowed_activities": "Only used when Activity filter mode is custom."
                 }
@@ -112,7 +113,7 @@
     "issues": {
         "garmin_shape_change_suspected": {
             "title": "Garmin LiveTrack response shape may have changed",
-            "description": "Garmin LiveTrack returned repeated durable anomalies such as missing sessions, missing trackpoints after tracking had already started, or sessions that ended without ever producing trackpoints. The integration has seen {count} consecutive anomaly signal(s), which often means Garmin changed the public site or API response shape. Check diagnostics, verify the configured HTTP User-Agent, and compare with a working LiveTrack in a browser before assuming the activity itself is gone."
+            "description": "Garmin LiveTrack returned repeated durable anomalies such as missing sessions, missing trackpoints after tracking had already started, or sessions that ended without ever producing trackpoints. The integration has seen {count} outstanding anomaly signal(s), which often means Garmin changed the public site or API response shape. Check diagnostics, verify the configured HTTP User-Agent, and compare with a working LiveTrack in a browser before assuming the activity itself is gone."
         }
     }
 }

@@ -3,7 +3,7 @@
 ## Purpose
 This document describes the Garmin request and parsing pipeline used by `ha-garmin-livetrack`.
 
-It is intended as a maintainer-facing deep dive into:
+For setup and operation, see the [README](../README.md). This document covers:
 - URL parsing
 - page bootstrap and CSRF handling
 - staged API fetches
@@ -19,7 +19,7 @@ For one LiveTrack session, the request strategy is:
 
 1. Parse and canonicalize the LiveTrack URL.
 2. Fetch the public LiveTrack page for that session.
-3. Extract cookies and a CSRF token from the page response.
+3. Read page HTML and extract a CSRF token when present; cookie handling belongs to the shared HTTP session.
 4. Fetch Garmin session metadata from `/api/v2/sessions/{sessionId}?token=...`.
 5. Fetch trackpoints from `/api/sessions/{sessionId}/track-points/common?token=...`.
 6. If dedicated trackpoint fetching is not usable, fall back to broader payload and hydration parsing.
@@ -42,7 +42,7 @@ Normalization behavior:
 - quoted-printable line breaks are removed first (`=\r\n`, `=\n`)
 - hostname must be `livetrack.garmin.com`
 - a canonical path-token URL is constructed for internal use
-- a redacted URL is stored alongside it for diagnostics and events
+- a redacted URL is stored alongside it for diagnostics; events contain no URL
 
 The resulting `LiveTrackIdentity` contains:
 - `session_id`
@@ -76,7 +76,7 @@ Returned page context includes:
 - structured page bootstrap errors
 
 Why this exists:
-- Garmin's API calls require cookie context and CSRF headers
+- bootstrap supplies page context and any available CSRF header for subsequent API calls
 - the page response is also the last-resort parsing source if dedicated JSON branches become unusable
 
 ## Step 2: Session Metadata Fetch
@@ -127,7 +127,7 @@ Current implementation details:
 - the request uses the exact last-point timestamp as the lower bound
 - exclusivity is enforced in the coordinator by filtering returned points to timestamps strictly greater than the last stored point
 
-This differs slightly from clients that bump the millisecond in the URL itself. The behavior goal is the same: avoid duplicate points without skipping valid new points.
+Filtering by timestamp avoids counting a repeated last point as a new point.
 
 Trackpoint extraction logic:
 - `_find_trackpoints()` searches for candidate arrays across nested payloads
@@ -155,14 +155,14 @@ Behavior:
 Applied to:
 - session metadata fetches
 - dedicated trackpoint fetches
-- legacy full fetches via the same internal helper path
+- full fallback fetches via the same internal helper path
 
 This keeps CSRF rotation contained in the client layer instead of leaking retry logic into the coordinator.
 
 ## Full Fetch Path
 Entry point: `GarminLiveTrackClient.fetch_full()`.
 
-`fetch_full()` is the staged compatibility path used when the coordinator is not in adaptive mode.
+`fetch_full()` is the staged path used when Garmin publish-frequency gating is disabled.
 
 Order:
 1. page bootstrap
@@ -180,10 +180,10 @@ The staged success path returns:
 
 If dedicated trackpoint fetch fails or is empty in a way that is not usable, the method falls back to broader parsing instead of failing immediately.
 
-## Legacy Full Fallback Path
+## Full Payload Fallback
 Entry point: `GarminLiveTrackClient.fetch_legacy_full()`.
 
-This path keeps the older broad parser available as an explicit fallback.
+This path parses the session payload and page hydration data when the dedicated trackpoint fetch is unusable.
 
 Order:
 1. page bootstrap
@@ -229,26 +229,17 @@ When Garmin-frequency gating is disabled:
 - this resolves to `fetch_full()`
 
 When Garmin-frequency gating is enabled:
-1. fetch session metadata first
-2. update `postTrackPointFrequency`
-3. determine whether trackpoints are allowed yet
-4. if not allowed yet:
-   - keep current point and count
-   - mark `trackpoints_source = deferred`
-   - avoid hitting the trackpoint endpoint early
-5. if allowed:
-   - call `fetch_trackpoints(begin=last_point.timestamp)`
-   - filter to points newer than the stored last point
-6. if new incremental points exist:
-   - append logically by increasing count
-   - use the newest incremental point as `last_trackpoint`
-7. if incremental fetch succeeds but returns no new points and `begin` was used:
-   - treat that as a valid "no new point yet" outcome
-   - do not trigger a heavy fallback
-8. if incremental fetch fails or is otherwise unusable:
-   - fall back to `fetch_legacy_full()`
+1. fetch session metadata; return its result if no usable session is found
+2. compare the fetch time against the previously computed `next_trackpoints_allowed_at`
+3. if the next point is not due, retain the current point/count and mark the source as `deferred`
+4. otherwise call `fetch_trackpoints(begin=last_point.timestamp)` and keep points newer than the previous point
+5. if new points exist, increase the count and use the newest point
+6. if the response has no errors and `begin` was supplied, retain the current point/count when all returned points are duplicates
+7. otherwise call `fetch_legacy_full()` and filter its points by timestamp as well
 
-This is the core efficiency path in the current design.
+An empty trackpoint response currently carries a `missing_trackpoints` error and takes the fallback path. It is not treated like an error-free response containing only duplicate points.
+
+After the fetch, `_refresh_once()` updates Garmin publishing frequency and computes the next allowed fetch time. Unlike `fetch_full()`, the adaptive path bootstraps page context separately in `fetch_session()` and `fetch_trackpoints()`.
 
 ## Adaptive Scheduling State
 Coordinator fields:
@@ -274,9 +265,7 @@ Implementation:
 - the trackpoint request may include `begin = last_point.timestamp`
 - after the response returns, `_new_trackpoints()` keeps only points with timestamps strictly greater than the previous point timestamp
 
-This guarantees:
-- repeated delivery of the last point does not create duplicates
-- the integration does not need to invent Garmin-side millisecond offsets in the request URL
+Points with a `dateTime` equal to or older than the previous timestamp are not counted again. Once a previous timestamp exists, points without a usable `dateTime` are also excluded.
 
 ## Error Surfaces
 Client errors are returned as structured `LiveTrackError` entries.
@@ -344,20 +333,20 @@ Metric normalization also happens after point parsing:
 - `duration_hms`
 - `has_location`
 
-The fetch pipeline itself does not invent Garmin values. It extracts, preserves, and then normalizes for stable entity/event presentation.
+The client extracts Garmin values. The coordinator can derive missing duration from session start and point timestamps, and missing distance or speed from successive GPS positions. Missing altitude, heart rate, power, and cadence can retain the previous point value. These are estimates or retained values, not fresh Garmin measurements.
 
 ## Privacy And Redaction Boundaries
 The fetch pipeline works with live tokens internally, but redaction rules still apply:
 - the token is not emitted in events
 - the token is not exposed in diagnostics
 - the token is not logged intentionally in normal paths
-- the token is stored only where restart recovery requires it
+- active-session storage includes tokens for recovery; retained ended-session summaries include full URLs
 
 The client constructs both:
 - `canonical_url`
 - `redacted_url`
 
-Downstream layers choose the redacted form for diagnostics and the full URL only where the product has intentionally decided to expose it.
+Status-sensor `url` attributes expose the full URL. Session diagnostics use the redacted form; events contain neither URL. Diagnostics still include user display names and configuration options.
 
 ## Why This Layering Exists
 The current design intentionally combines two approaches:
@@ -373,7 +362,7 @@ That gives the integration a better operating envelope than either approach alon
 ## Current Limitations
 The current pipeline still assumes:
 - Garmin page bootstrap remains publicly reachable
-- a CSRF token remains discoverable in page HTML
+- if Garmin requires CSRF protection, a usable token can be discovered in page HTML
 - trackpoint-like data remains identifiable by current heuristics
 
 If Garmin changes those assumptions again, the likely repair path is:

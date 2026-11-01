@@ -1,23 +1,23 @@
-# TODO
+# Development Backlog
 
-## Near Term
-- Expand options-flow tests for user policy editing and Advanced/profile interactions.
-- Add deeper discarded/no-data no-END lifecycle coverage.
-- Expand automated coverage for shape-change signal transitions.
+This file tracks outstanding work. Setup and supported behavior are documented in the [README](README.md).
 
-## Later
-- Reduce remaining ambiguity when user settings inherit global defaults.
-- Prevent any residual entity creation for rejected/register-only unknown-user events before policy rejection is finalized.
-- Tighten user-facing documentation around the `strict_users` / `accept_first_seen_users` matrix.
+## Validation and Test Coverage
 
-## Completed for 0.2.1
-- Use Garmin LiveTrack API v2 for session metadata while retaining the existing incremental trackpoint endpoint.
-- Align the integration manifest, package version, default User-Agent, and README to `0.2.1`.
-- Add a cross-platform `.gitattributes` policy and normalize tracked text in Git to LF.
-- Update the fetch strategy documentation and add v0.2.1 release notes.
+- Replace the placeholder in `tests/test_services.py` with service registration, targeting, response, and user-management tests.
+- Expand options-flow tests for saving user policies, custom activity filters, and Advanced baseline changes. Existing tests cover editor routing, user removal, and preserving advanced settings.
+- Extend lifecycle coverage for discarded activities and fetch failures during finalization. Basic no-END completion, no-trackpoint timeouts, and past-end inference already have tests.
+- Expand repair-signal coverage for repeated anomalies, recovery, and concurrent sessions. Basic signal synchronization and startup recovery already have tests.
+- Validate the [notification example](docs/garmin_livetrack_notifications_example_unverified.yaml) on a live Home Assistant setup with Android and iOS clients.
+- Validate more Garmin activity types and confirm the declared minimum Home Assistant version against the APIs used by the integration.
 
-## Release Management
-- Run the repository test suite in the documented Python 3.12 environment before publishing `v0.2.1`.
-- Create tag `v0.2.1`.
-- Publish the matching GitHub release using `docs/releases/v0.2.1.md`.
-- Verify HACS picks up the tagged release correctly.
+## Behavior to Review
+
+- Review user-policy semantics: disabled users are currently blocked only in strict-user mode, and handling modes are not independent runtime gates.
+- Verify that rejected or register-only sessions do not leave unintended entities or emit notifications before admission completes.
+- Review empty incremental trackpoint responses: they currently trigger the full fallback instead of being treated as a no-new-point result.
+- Clarify inherited settings in the options UI where effective global values are not shown.
+
+## Release Preparation
+
+- Publish tag `v0.2.1` and its matching release using [the release notes](docs/releases/v0.2.1.md), then verify HACS installation; follow the [release checklist](docs/ARCHITECTURE.md#release-model).
