@@ -182,19 +182,22 @@ def _entity_label(entity_key: str, coord) -> str:
     return entity_key
 
 
-def _device_info(entity_key: str, coord) -> DeviceInfo:
+def _device_info(entity_key: str, coord, manager=None) -> DeviceInfo:
     label = _entity_label(entity_key, coord)
+    if coord is None and manager is not None:
+        if policy := manager.known_users.get(entity_key):
+            label = policy.name.strip() or label
     if entity_key.startswith("session:"):
         sid = entity_key.split(":", 1)[1]
         return DeviceInfo(
             identifiers={(DOMAIN, f"session:{sid}")},
-            name=f"Garmin LiveTrack {label}",
+            name=label,
             manufacturer="Garmin",
             model="LiveTrack Session",
         )
     return DeviceInfo(
         identifiers={(DOMAIN, f"user:{stable_session_hash(entity_key)}")},
-        name=f"Garmin LiveTrack {label}",
+        name=label,
         manufacturer="Garmin",
         model="LiveTrack User",
     )
@@ -288,10 +291,10 @@ class GarminUserStatusSensor(_BaseManagerSensor):
     def device_info(self):
         session, coord = _select_session_snapshot(self.manager, self.entity_key)
         if coord is not None:
-            return _device_info(self.entity_key, coord)
+            return _device_info(self.entity_key, coord, self.manager)
         if session is not None:
-            return _device_info(self.entity_key, _SessionWrapper(session))
-        return _device_info(self.entity_key, None)
+            return _device_info(self.entity_key, _SessionWrapper(session), self.manager)
+        return _device_info(self.entity_key, None, self.manager)
 
     @property
     def available(self):

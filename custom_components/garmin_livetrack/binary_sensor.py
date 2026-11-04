@@ -126,10 +126,10 @@ class GarminUserActiveBinarySensor(_BaseBinary):
     def device_info(self):
         session, coord = _select_session_snapshot(self.manager, self.entity_key)
         if coord is not None:
-            return _device_info(self.entity_key, coord)
+            return _device_info(self.entity_key, coord, self.manager)
         if session is not None:
-            return _device_info(self.entity_key, _SessionWrapper(session))
-        return _device_info(self.entity_key, None)
+            return _device_info(self.entity_key, _SessionWrapper(session), self.manager)
+        return _device_info(self.entity_key, None, self.manager)
 
     @property
     def is_on(self):

@@ -2,7 +2,7 @@
 
 Track Garmin LiveTrack activities in Home Assistant. See who is active, display their location on a map, and use activity updates in your dashboards and automations.
 
-**Repository version: `0.2.1`**, with Garmin LiveTrack API v2 support. See the [release notes](docs/releases/v0.2.1.md) and [published releases](https://github.com/tjuuljensen/ha-garmin-livetrack/releases).
+**Repository version: `0.2.2`**, with Garmin LiveTrack API v2 support. See the [release notes](docs/releases/v0.2.2.md) and [published releases](https://github.com/tjuuljensen/ha-garmin-livetrack/releases).
 
 ![Garmin LiveTrack integration overview showing an integration device and three user devices](docs/images/custom_integration_overview.png)
 
@@ -86,6 +86,8 @@ The integration device shows `Active Count`, `Any Active`, and `Last Error` acro
 
 Each Garmin user gets a device containing a status sensor, an active indicator, and a location tracker. Use these entities in your dashboards, maps, and automations.
 
+The user device and its tracker use the Garmin display name by default. Map markers show initials unless you supply a picture. Existing entity IDs stay unchanged. See [map names, pictures, and icons](docs/ADVANCED.md#map-names-pictures-and-icons) for YAML customization examples.
+
 ![Garmin user device showing activity status and a location tracker](docs/images/user_device.png)
 
 Finished-session summaries remain available during the configured retention window, including across Home Assistant restarts. See the [entity reference](docs/ADVANCED.md#entity-reference) for entity IDs and attributes.
@@ -112,4 +114,4 @@ For other problems, see [troubleshooting](docs/ADVANCED.md#troubleshooting) or [
 
 - [Advanced configuration and reference](docs/ADVANCED.md): email setup, user policies, actions, events, tuning, diagnostics, and local testing.
 - [Architecture](docs/ARCHITECTURE.md) and [Garmin fetch strategy](docs/GARMIN_FETCH_STRATEGY.md): implementation details for contributors.
-- [Development backlog](TODO.md) and [release notes](docs/releases/v0.2.1.md).
+- [Development backlog](TODO.md) and [release notes](docs/releases/v0.2.2.md).

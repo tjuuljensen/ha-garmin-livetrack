@@ -1,6 +1,6 @@
 # Advanced Configuration and Reference
 
-Start with the [README](../README.md) for installation and everyday use. This guide covers optional configuration, automation interfaces, troubleshooting, and development. Examples and action names match repository version `0.2.1`.
+Start with the [README](../README.md) for installation and everyday use. This guide covers optional configuration, automation interfaces, troubleshooting, and development. Examples and action names match repository version `0.2.2`.
 
 ## Contents
 
@@ -130,7 +130,7 @@ This keeps entity state, events, and diagnostics stable without hiding Garmin-sp
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
-- `HomeAssistant-GarminLiveTrack/0.2.1`
+- `HomeAssistant-GarminLiveTrack/0.2.2`
 
 Typical reasons to change it:
 - Garmin behaves differently for different clients
@@ -257,6 +257,54 @@ The per-user status sensor retains the most recent ended session during the conf
 
 ### Session fallback device
 If a session becomes active before Garmin returns a user display name, the integration can use a temporary session-based fallback device until a user identity is known.
+
+### Map names, pictures, and icons
+
+User devices are named after the Garmin display name, and the location tracker uses that device name without a `Garmin LiveTrack` prefix. Before the first session, configured users keep the spelling of their configured name. Unidentified sessions use `Session <short hash>` as a fallback. The integration-level device is still named `Garmin LiveTrack`.
+
+This display change preserves existing entity IDs and device identifiers, so dashboard and automation references keep working. User-supplied device names, entity names, and YAML customizations remain in effect. If an old label still appears after restarting Home Assistant, check the tracker and device name overrides under `Settings -> Devices & services`, along with any map-card name override. Clear an override to use the new default; do not recreate entity IDs.
+
+Home Assistant normally shows the tracker's picture on a map, or initials when there is no picture. The activity icon used elsewhere changes with the activity and its status. You can customize these through Home Assistant without mapping the tracker to a Person.
+
+#### Custom name and photo
+
+Add this to `configuration.yaml`, replacing `device_tracker.your_garmin_tracker` with the tracker's existing entity ID:
+
+```yaml
+homeassistant:
+  customize:
+    device_tracker.your_garmin_tracker:
+      friendly_name: "Thomas"
+      entity_picture: /local/thomas.jpg
+```
+
+Place `thomas.jpg` in `/config/www/` (create `www` if necessary); Home Assistant serves it as `/local/thomas.jpg`. Both customization fields are optional: omit `friendly_name` to keep the default name, or omit `entity_picture` to keep initials.
+
+Merge this into an existing `homeassistant:` / `customize:` section rather than creating duplicate keys. If you already use `customize: !include customize.yaml`, put only the entity ID and its attributes in that file. Reload `Location & customizations` under `Developer tools -> YAML`, or restart Home Assistant. Restart if you have just created the `www` folder.
+
+#### Custom icon on a map card
+
+For a fixed icon, use this alternative customization (or add its `icon` field to your existing entry):
+
+```yaml
+homeassistant:
+  customize:
+    device_tracker.your_garmin_tracker:
+      icon: mdi:run
+```
+
+A fixed icon overrides the integration's automatic activity icon changes. Setting `icon` alone does not replace initials on the default map marker. On Home Assistant versions supporting `label_mode`, add this custom dashboard map card to explicitly show the icon:
+
+```yaml
+type: map
+entities:
+  - entity: device_tracker.your_garmin_tracker
+    label_mode: icon
+```
+
+Omit the fixed `icon` customization to show the integration's changing activity icon in this card. For a photo marker, use the first example and omit `label_mode` from the map card.
+
+See Home Assistant's [entity customization](https://www.home-assistant.io/docs/configuration/customizing-entities), [local file hosting](https://www.home-assistant.io/integrations/http/#hosting-files), and [map card](https://www.home-assistant.io/dashboards/map/) documentation.
 
 ## Polling and Recovery
 

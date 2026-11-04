@@ -13,7 +13,7 @@ from .models import (
     speed_kmh_from_mps,
     stable_session_hash,
 )
-from .sensor import _SessionWrapper, _device_info, _discover_entity_keys, _entity_label, _select_session_snapshot
+from .sensor import _SessionWrapper, _device_info, _discover_entity_keys, _select_session_snapshot
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -36,6 +36,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class GarminUserTracker(TrackerEntity):
+    # The tracker represents the user device itself. Let Home Assistant use its
+    # name once, without a Garmin LiveTrack prefix or a repeated user name.
+    _attr_has_entity_name = True
+    _attr_name = None
+
     def __init__(self, manager, entity_key: str):
         self.manager = manager
         self.entity_key = entity_key
@@ -50,19 +55,13 @@ class GarminUserTracker(TrackerEntity):
             self._unsub()
 
     @property
-    def name(self):
-        session, coord = _select_session_snapshot(self.manager, self.entity_key)
-        wrapped = coord if coord is not None else (_SessionWrapper(session) if session is not None else None)
-        return _entity_label(self.entity_key, wrapped)
-
-    @property
     def device_info(self):
         session, coord = _select_session_snapshot(self.manager, self.entity_key)
         if coord is not None:
-            return _device_info(self.entity_key, coord)
+            return _device_info(self.entity_key, coord, self.manager)
         if session is not None:
-            return _device_info(self.entity_key, _SessionWrapper(session))
-        return _device_info(self.entity_key, None)
+            return _device_info(self.entity_key, _SessionWrapper(session), self.manager)
+        return _device_info(self.entity_key, None, self.manager)
 
     @property
     def source_type(self):
