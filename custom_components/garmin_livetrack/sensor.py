@@ -124,6 +124,7 @@ def _summary_metrics(session):
             "power_w": None,
             "cadence": None,
             "altitude_m": None,
+            "elevation_gain_m": None,
         }
 
     duration_s = None if point.duration_s is None else float(point.duration_s)
@@ -149,6 +150,7 @@ def _summary_metrics(session):
         "power_w": point.power_w,
         "cadence": point.cadence,
         "altitude_m": point.altitude_m,
+        "elevation_gain_m": point.elevation_gain_m,
     }
 
 

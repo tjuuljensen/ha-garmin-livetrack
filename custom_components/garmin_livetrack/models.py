@@ -93,6 +93,7 @@ class LiveTrackPoint:
     cadence: float | None = None
     event_types: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    elevation_gain_m: float | None = None
 
 
 @dataclass

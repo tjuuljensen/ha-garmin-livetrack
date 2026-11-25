@@ -7,6 +7,7 @@ from .icons import activity_icon
 from .models import (
     distance_km_from_m,
     duration_hms_from_seconds,
+    normalize_activity,
     pace_min_km_from_speed_mps,
     speed_kmh_from_mps,
     stable_session_hash,
@@ -98,15 +99,14 @@ class GarminAnyActiveBinarySensor(_BaseBinary):
 
     @property
     def icon(self):
-        active = [
-            c for c in self.manager.sessions.values()
+        activities = {
+            normalize_activity(c.session.activity_type) for c in self.manager.sessions.values()
             if c.session.status in ACTIVE_STATES
-        ]
-        if not active:
+        }
+        if not activities:
             return "mdi:map-marker-path"
-        if len(active) == 1:
-            coord = active[0]
-            return activity_icon(coord.session.activity_type, True)
+        if len(activities) == 1:
+            return activity_icon(next(iter(activities)), True)
         return "mdi:map-marker-multiple"
 
 

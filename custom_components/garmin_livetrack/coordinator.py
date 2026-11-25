@@ -386,6 +386,7 @@ class LiveTrackSessionCoordinator:
             payload["fitnessPointData"]["longitude"] = point.longitude
         for key, value in {
             "altitude": point.altitude_m,
+            "totalElevationGainMeters": point.elevation_gain_m,
             "speed": point.speed_mps,
             "distance": point.distance_m,
             "duration": point.duration_s,
@@ -634,6 +635,7 @@ class LiveTrackSessionCoordinator:
         if previous_point is not None:
             for attr in (
                 "altitude_m",
+                "elevation_gain_m",
                 "heart_rate_bpm",
                 "power_w",
                 "cadence",
@@ -729,6 +731,13 @@ class LiveTrackSessionCoordinator:
             fpd,
             keys=("heartRate", "heartRateBpm", "heart_rate_bpm", "heartRateInBeatsPerMinute"),
         )
+        # Current REST points are flat; older payloads nest fitness metrics.
+        # Match Garmin's frontend preference for total gain over gain.
+        elevation_gain = self._pick_metric(
+            raw,
+            fpd,
+            keys=("totalElevationGainMeters", "elevationGainMeters"),
+        )
         power = self._pick_metric(raw, fpd, keys=("power", "powerWatts", "powerInWatts"))
         cadence = self._pick_metric(raw, fpd, keys=("cadence", "cadenceRpm", "stepsPerMinute"))
         return LiveTrackPoint(
@@ -736,6 +745,7 @@ class LiveTrackSessionCoordinator:
             latitude=self._metric_float(lat),
             longitude=self._metric_float(lon),
             altitude_m=self._metric_float(altitude),
+            elevation_gain_m=self._metric_float(elevation_gain),
             speed_mps=self._metric_float(speed),
             distance_m=self._metric_float(distance),
             duration_s=self._metric_seconds(duration),
@@ -885,6 +895,7 @@ class GarminLiveTrackManager:
             "latitude": point.latitude if point else None,
             "longitude": point.longitude if point else None,
             "altitude_m": point.altitude_m if point else None,
+            "elevation_gain_m": point.elevation_gain_m if point else None,
             "speed_mps": point.speed_mps if point else None,
             "speed_kmh": speed_kmh,
             "pace_min_km": pace_min_km,
@@ -916,6 +927,7 @@ class GarminLiveTrackManager:
             "latitude": point.latitude,
             "longitude": point.longitude,
             "altitude_m": point.altitude_m,
+            "elevation_gain_m": point.elevation_gain_m,
             "speed_mps": point.speed_mps,
             "distance_m": point.distance_m,
             "duration_s": point.duration_s,
@@ -934,6 +946,7 @@ class GarminLiveTrackManager:
             latitude=value.get("latitude"),
             longitude=value.get("longitude"),
             altitude_m=value.get("altitude_m"),
+            elevation_gain_m=value.get("elevation_gain_m"),
             speed_mps=value.get("speed_mps"),
             distance_m=value.get("distance_m"),
             duration_s=value.get("duration_s"),

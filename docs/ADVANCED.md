@@ -1,6 +1,6 @@
 # Advanced Configuration and Reference
 
-Start with the [README](../README.md) for installation and everyday use. This guide covers optional configuration, automation interfaces, troubleshooting, and development. Examples and action names match repository version `0.2.2`.
+Start with the [README](../README.md) for installation and everyday use. This guide covers optional configuration, automation interfaces, troubleshooting, and development. Examples and action names match repository version `0.2.3`.
 
 ## Contents
 
@@ -130,7 +130,7 @@ This keeps entity state, events, and diagnostics stable without hiding Garmin-sp
 The integration lets you override the HTTP User-Agent used for Garmin page and API requests.
 
 Default:
-- `HomeAssistant-GarminLiveTrack/0.2.2`
+- `HomeAssistant-GarminLiveTrack/0.2.3`
 
 Typical reasons to change it:
 - Garmin behaves differently for different clients
@@ -230,6 +230,7 @@ Point metrics include:
 - `cadence`
 - `event_types`
 - `altitude_m`
+- `elevation_gain_m`
 - `has_location`
 
 Events contain no LiveTrack URL or token. A manual stop emits `garmin_livetrack_session_updated` with `status: stopped` and `reason: manual`, rather than `garmin_livetrack_session_ended`.
@@ -247,6 +248,8 @@ These are attached to one integration-level Garmin LiveTrack device:
 - `active_activities`
 - `active_summaries`
 
+The icon follows the activity when all active sessions share the same normalized activity, including multiple sessions for one user. Mixed activities use `mdi:map-marker-multiple`; no active sessions use `mdi:map-marker-path`. Counts and summaries remain per session, so a user can appear more than once. Sessions fetching data, waiting for a first trackpoint, or ending also count as active.
+
 ### Per-user entities
 Each known Garmin user gets a stable Home Assistant device with:
 - status sensor
@@ -254,6 +257,8 @@ Each known Garmin user gets a stable Home Assistant device with:
 - device tracker
 
 The per-user status sensor retains the most recent ended session during the configured retention window so dashboards can continue to show the final activity state and summary values after the LiveTrack stops. Retained ended-session summaries are stored and restored across Home Assistant restarts.
+
+The status sensor, device tracker, and session/point events expose `elevation_gain_m` in metres, separately from current altitude. It reads Garmin's `totalElevationGainMeters`, falling back to `elevationGainMeters`. Missing gain stays `null` until Garmin supplies it; sparse later points retain the last supplied value. The integration does not estimate gain from altitude changes.
 
 ### Session fallback device
 If a session becomes active before Garmin returns a user display name, the integration can use a temporary session-based fallback device until a user identity is known.

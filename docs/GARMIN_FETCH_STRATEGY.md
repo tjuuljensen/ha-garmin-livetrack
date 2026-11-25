@@ -192,6 +192,14 @@ Order:
 
 This path is still important because Garmin can shift useful trackpoint data into payload branches or hydration blobs even when the dedicated endpoint becomes unusable or incomplete.
 
+## Elevation Gain Verification
+
+Checked on 2026-11-25 against Garmin's production frontend (`livetrack@0.1.358`): the session page fetches `/api/sessions/{session_id}/track-points/common` and its metrics code reads flat `totalElevationGainMeters`, falling back to flat `elevationGainMeters`. The integration exposes this optional value as `elevation_gain_m` and also accepts the older nested `fitnessPointData` shape.
+
+Evidence: [REST fetch code](https://livetrack.garmin.com/_next/static/chunks/app/session/%5BsessionId%5D/token/%5BtokenId%5D/page-1659984d030e1062.js) and [metrics code](https://livetrack.garmin.com/_next/static/chunks/190-e7f3ce66042d8eab.js). These deployment-specific asset URLs may change.
+
+A direct HTTP 200 response for a supplied ended session contained 284 trackpoints, all without either elevation-gain field. This verifies that gain can be absent; a live non-null gain value was not observed. Frontend support is evidence for the optional fields, not a guarantee that every device/session supplies them. No private session URLs, tokens, coordinates, or raw responses are stored here.
+
 ## Payload And Hydration Fallbacks
 Primary implementation points:
 - `normalize_payload()`

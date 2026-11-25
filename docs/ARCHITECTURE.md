@@ -199,7 +199,7 @@ The integration keeps Garmin raw point fields where useful and also derives norm
 - `duration_hms`
 - `has_location`
 
-When Garmin omits duration, distance, or speed, the coordinator can derive them from timestamps and GPS movement. Sparse points can retain earlier altitude, heart rate, power, and cadence. Session diagnostics omit raw point data and coordinates.
+When Garmin omits duration, distance, or speed, the coordinator can derive them from timestamps and GPS movement. Sparse points can retain earlier altitude, elevation gain, heart rate, power, and cadence. Optional `elevation_gain_m` comes from Garmin's `totalElevationGainMeters` or `elevationGainMeters`; it is not derived from altitude changes. Session diagnostics omit raw point data and coordinates.
 
 
 ## Transport Backoff
@@ -254,7 +254,9 @@ Status entities expose full LiveTrack URLs, including tokens. Recovery storage a
 See [Privacy and Security](../README.md#privacy-and-security) before sharing state exports or diagnostics.
 
 ## Release Model
-HACS-facing releases should map to explicit Git tags and GitHub releases. The repository should not treat arbitrary `main` commits as published release artifacts.
+Marketplace releases should map to explicit Git tags and GitHub releases. The repository should not treat arbitrary `main` commits as published release artifacts.
+
+Marketplace retains the publisher tooling names `hacs.json` and `hacs/action`; see the [Home Assistant contributor documentation](https://contributors.home-assistant.io/glossary/hacs/). Keep these filenames and action references when updating user-facing Marketplace instructions.
 
 Release checklist:
 1. bump `manifest.json`, `pyproject.toml`, and the default User-Agent version together
@@ -262,6 +264,6 @@ Release checklist:
 3. run the [local test suite](ADVANCED.md#local-testing) and check the Tests, HACS, and Hassfest workflows
 4. create tag `vX.Y.Z`
 5. publish a GitHub release from that tag
-6. verify installation of the published version through HACS
+6. confirm the published version can be installed through Marketplace
 
 This keeps installation state, diagnostics, and support discussions aligned to a concrete published artifact.

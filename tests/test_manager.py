@@ -1,8 +1,9 @@
 import pytest
 from datetime import UTC, datetime, timedelta
 import re
+from types import SimpleNamespace
 
-from custom_components.garmin_livetrack.client import GarminFetchResult, GarminTrackpointResult
+from custom_components.garmin_livetrack.client import GarminFetchResult, GarminLiveTrackClient, GarminTrackpointResult
 from custom_components.garmin_livetrack.coordinator import GarminLiveTrackManager, LiveTrackSessionCoordinator
 from custom_components.garmin_livetrack.binary_sensor import GarminAnyActiveBinarySensor
 from custom_components.garmin_livetrack.const import EVENT_POINT_RECEIVED
@@ -668,6 +669,81 @@ async def test_any_active_binary_sensor_exposes_aggregate_attributes(hass):
     assert attrs["active_summaries"][0]["activity_type"] == "running"
     assert attrs["active_summaries"][0]["activity_type_raw"] == "running"
     assert attrs["active_summaries"][0]["activity_icon"] == "mdi:run-fast"
+
+
+@pytest.mark.parametrize(
+    ("activities", "expected_icon"),
+    [
+        ([], "mdi:map-marker-path"),
+        (["running"], "mdi:run-fast"),
+        (["running", "running"], "mdi:run-fast"),
+        (["running", "RUNNING", "Trail Running"], "mdi:run-fast"),
+        (["cycling", "cycling"], "mdi:bike-fast"),
+        (["running", "cycling"], "mdi:map-marker-multiple"),
+        ([None, None], "mdi:map-marker-path"),
+        (["unknown_activity", "unknown_activity"], "mdi:map-marker-path"),
+        (["unknown_activity", "another_activity"], "mdi:map-marker-multiple"),
+        (["running", None], "mdi:map-marker-multiple"),
+    ],
+)
+def test_any_active_icon_uses_shared_activity(activities, expected_icon):
+    sessions = {
+        str(index): SimpleNamespace(session=SimpleNamespace(
+            activity_type=activity, status=LiveTrackStatus.ACTIVE,
+        ))
+        for index, activity in enumerate(activities)
+    }
+    # Retained terminal sessions must not influence the active activity icon.
+    sessions["ended"] = SimpleNamespace(session=SimpleNamespace(
+        activity_type="swimming", status=LiveTrackStatus.ENDED,
+    ))
+    entity = GarminAnyActiveBinarySensor(SimpleNamespace(sessions=sessions))
+    assert entity.icon == expected_icon
+
+
+@pytest.mark.parametrize("status", [
+    LiveTrackStatus.FETCHING,
+    LiveTrackStatus.WAITING_FOR_TRACKPOINT,
+    LiveTrackStatus.ACTIVE,
+    LiveTrackStatus.ENDING,
+])
+def test_any_active_icon_includes_all_active_states(status):
+    sessions = {
+        "running": SimpleNamespace(session=SimpleNamespace(
+            activity_type="running", status=LiveTrackStatus.ACTIVE,
+        )),
+        "cycling": SimpleNamespace(session=SimpleNamespace(
+            activity_type="cycling", status=status,
+        )),
+    }
+    assert GarminAnyActiveBinarySensor(SimpleNamespace(sessions=sessions)).icon == "mdi:map-marker-multiple"
+
+
+@pytest.mark.asyncio
+async def test_imap_distinct_session_ids_retain_identical_activity_data(hass):
+    client = UrlAwareDummyClient()
+    client.parse_livetrack_identity = GarminLiveTrackClient(None).parse_livetrack_identity
+    m = GarminLiveTrackManager(hass, client, DummyStore(), {})
+    await m.async_setup()
+    try:
+        for sid, token in [("first", "token1"), ("first", "token2"), ("second", "token3")]:
+            await m.async_handle_imap_event(SimpleNamespace(data={
+                "text": f"https://livetrack.garmin.com/session/{sid}/token/{token}",
+            }))
+
+        assert set(m.sessions) == {"first", "second"}
+        first, second = m.sessions.values()
+        assert first.session.last_point == second.session.last_point
+        entity = GarminAnyActiveBinarySensor(m)
+        attrs = entity.extra_state_attributes
+        assert attrs["active_count"] == 2
+        assert attrs["active_users"] == ["Runner", "Runner"]
+        assert attrs["active_activities"] == ["running", "running"]
+        assert {s["source"] for s in attrs["active_summaries"]} == {"imap"}
+        assert len({s["session_id_hash"] for s in attrs["active_summaries"]}) == 2
+        assert entity.icon == "mdi:run-fast"
+    finally:
+        await m.async_unload()
 
 
 @pytest.mark.asyncio

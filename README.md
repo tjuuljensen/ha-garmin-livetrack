@@ -2,7 +2,7 @@
 
 Track Garmin LiveTrack activities in Home Assistant. See who is active, display their location on a map, and use activity updates in your dashboards and automations.
 
-**Repository version: `0.2.2`**, with Garmin LiveTrack API v2 support. See the [release notes](docs/releases/v0.2.2.md) and [published releases](https://github.com/tjuuljensen/ha-garmin-livetrack/releases).
+**Repository version: `0.2.3`**, with optional elevation-gain attributes and Garmin LiveTrack API v2 support. See the [release notes](docs/releases/v0.2.3.md) and [published releases](https://github.com/tjuuljensen/ha-garmin-livetrack/releases).
 
 ![Garmin LiveTrack integration overview showing an integration device and three user devices](docs/images/custom_integration_overview.png)
 
@@ -32,14 +32,18 @@ Garmin LiveTrack is not a documented public API. Garmin-side changes can affect 
 
 ## Installation
 
-### HACS custom repository
+### Home Assistant Marketplace
 
-1. Add `https://github.com/tjuuljensen/ha-garmin-livetrack` as a custom HACS repository.
-2. Choose category `Integration` and install `Garmin LiveTrack`.
-3. Restart Home Assistant.
-4. Open `Settings -> Devices & Services`, select `Add integration`, and search for `Garmin LiveTrack`.
+Marketplace is built into Home Assistant 2026.11 and later, replacing HACS. Existing HACS installations and custom repositories migrate automatically. See the [Marketplace documentation](https://www.home-assistant.io/integrations/marketplace/).
+
+1. Open `Settings -> Marketplace` and select `Add from link`.
+2. Enter `https://github.com/tjuuljensen/ha-garmin-livetrack` and select `Add`. Connect GitHub if prompted; choose type `Integration` if requested.
+3. Open `Garmin LiveTrack` and select `Install`.
+4. Follow the setup prompt, or open `Settings -> Devices & services -> Add integration` and search for `Garmin LiveTrack`. Restart Home Assistant if prompted.
 
 For versioned installs, select a published release. If no release is available, use the manual installation below. Branch contents may include unreleased changes.
+
+Updates appear under `Settings -> Updates`. Restart Home Assistant after updating the integration. On Home Assistant versions before 2026.11, use an existing HACS installation or install manually.
 
 ### Manual installation
 
@@ -92,6 +96,8 @@ The user device and its tracker use the Garmin display name by default. Map mark
 
 Finished-session summaries remain available during the configured retention window, including across Home Assistant restarts. See the [entity reference](docs/ADVANCED.md#entity-reference) for entity IDs and attributes.
 
+When Garmin supplies elevation gain, the status sensor and device tracker expose it as `elevation_gain_m`, separately from current altitude. Sessions without that data show an unknown value; gain is not estimated from altitude changes.
+
 ## Notifications
 
 Use Home Assistant automations to send notifications when tracking starts, updates, or ends. The integration supplies entities and events; notification delivery is handled by your automations.
@@ -114,4 +120,4 @@ For other problems, see [troubleshooting](docs/ADVANCED.md#troubleshooting) or [
 
 - [Advanced configuration and reference](docs/ADVANCED.md): email setup, user policies, actions, events, tuning, diagnostics, and local testing.
 - [Architecture](docs/ARCHITECTURE.md) and [Garmin fetch strategy](docs/GARMIN_FETCH_STRATEGY.md): implementation details for contributors.
-- [Development backlog](TODO.md) and [release notes](docs/releases/v0.2.2.md).
+- [Development backlog](TODO.md) and [release notes](docs/releases/v0.2.3.md).

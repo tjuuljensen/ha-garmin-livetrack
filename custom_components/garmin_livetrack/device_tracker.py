@@ -99,6 +99,7 @@ class GarminUserTracker(TrackerEntity):
             "garmin_user": s.garmin_user,
             "status": s.status.value,
             "altitude": p.altitude_m if p else None,
+            "elevation_gain_m": p.elevation_gain_m if p else None,
             "speed": p.speed_mps if p else None,
             "speed_kmh": speed_kmh_from_mps(p.speed_mps) if p else None,
             "pace_min_km": pace_min_km_from_speed_mps(p.speed_mps) if p else None,
